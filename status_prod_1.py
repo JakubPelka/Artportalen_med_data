@@ -1,322 +1,429 @@
-#Zmien w input_file sciezke do pliku z danymi Excel z artportalen
-#Zachowaj biezacy skrypt, plik z gatunkami inwazyjnymi oraz plik przetwarzany w tej samej lokalizacji
-#Skrypt usuwa duplikaty a nastepnie do danych z artportalen dopisuje informacje z artfakta na temat statusu ochrony czy inwazyjnosci. 
-#Inwazyjnosc bazuje na pobranym pliku XLS.
-
-print("Witaj w skrypcie uzupelniajacym dane o gatunkach na bazie TaxonId danymi z Artfakta wykorzystujac ich API")
-print("Jako wynik skryptu uzyskasz nowy plik XLS z nowymi fajnymi kolumnami")
-print("Skrypt realizuje okolo 4-5 gatunkow na sekunde, wiec w zaleznosci od wielkosci pliku wejsciowego analiza moze chwile zajac")
-
-import pandas as pd
-import requests
-import time
 import os
+import sys
+import time
+import json
+import requests
+import pandas as pd
+from datetime import datetime
 
-# === TWOJE KLUCZE ===
-taxonomy_key        = "a2753962eba449bbbfdd253baf66fd26"
-species_key         = "71c0e472ab954c37896ee2d91f042ff1"
-input_file          = r"D:\Artportalen_tabeller_Script_with_data\Artportalen20152025_TableToExcel.xlsx"
-output_file         = input_file.replace(".xlsx", "_with_data.xlsx")
-log_file            = os.path.join(os.path.dirname(input_file), "log.txt")
+"""
+Status_V2_from_TaxonId — v2
+- Fix: KeyError 'TaxonId' przy merge (zawsze dołączamy kolumnę klucza po prawej stronie).
+- Nowość: pytanie (Yes/No) czy zapisać też tabelę **bez deduplikacji** (ALLROWS) — jeśli tak:
+  1) zapisujemy pełny plik ALLROWS (bez usuwania duplikatów),
+  2) zapisujemy wersję z deduplikacją,
+  3) zapisujemy wersję tylko chronione.
+- Wcześniejsza deduplikacja po TaxonId (>0) służy tylko do ograniczenia liczby zapytań do API; ALLROWS łączy się potem
+  z oryginalną tabelą, więc zachowuje wszystkie wiersze.
+- Brak dublowania kolumn wejściowych (case-insensitive) — dodajemy tylko nowe.
+- Sort przeglądowej listy (dedupe) wg RedList: RE, CR, EN, VU, NT, DD, LC, NA, NE; potem SwedishName/ScientificName.
+"""
 
-headers_taxon    = {"Ocp-Apim-Subscription-Key": taxonomy_key}
-headers_species  = {"Ocp-Apim-Subscription-Key": species_key, "Cache-Control": "no-cache"}
+# ========= KONFIG ========= #
+TAXONOMY_KEY = os.getenv("TAXONOMY_KEY", "a2753962eba449bbbfdd253baf66fd26")
+SPECIES_KEY  = os.getenv("SPECIES_KEY",  "71c0e472ab954c37896ee2d91f042ff1")
 
-def log_and_print(msg):
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+SPECIES_SLEEP    = 0.10
+TIMEOUT          = 30
+DEBUG_DUMP_LISTS = False  # ustaw True, by zapisać lists_raw_<TaxonId>.json do OUTPUT_DIR
+
+SPECIES_URL    = "https://api.artdatabanken.se/information/v1/speciesdataservice/v1/speciesdata"
+HEADERS_SPECIES = {"Ocp-Apim-Subscription-Key": SPECIES_KEY, "Accept": "application/json", "Cache-Control": "no-cache"}
+
+# Redlist porządek sortowania (niższa wartość = wyżej)
+RL_ORDER = {"RE":0, "CR":1, "EN":2, "VU":3, "NT":4, "DD":5, "LC":6, "NA":7, "NE":8}
+
+# ========= UI: okienka ========= #
+
+def choose_input_file(initial_dir: str = None) -> str:
+    try:
+        from tkinter import Tk, filedialog
+        root = Tk(); root.withdraw()
+        path = filedialog.askopenfilename(
+            title="Wybierz plik Excel (z TaxonId)",
+            initialdir=initial_dir if (initial_dir and os.path.isdir(initial_dir)) else None,
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")],
+        )
+        root.destroy(); return path or ""
+    except Exception:
+        return ""
+
+
+def choose_output_dir(initial_dir: str = None) -> str:
+    try:
+        from tkinter import Tk, filedialog
+        root = Tk(); root.withdraw()
+        path = filedialog.askdirectory(
+            title="Wybierz folder zapisu wyników",
+            initialdir=initial_dir if (initial_dir and os.path.isdir(initial_dir)) else None,
+            mustexist=True,
+        )
+        root.destroy(); return path or ""
+    except Exception:
+        return ""
+
+
+def ask_yes_no(title: str, question: str, default: bool=False) -> bool:
+    """Pyta użytkownika o Yes/No przez tkinter; fallback na konsolę."""
+    try:
+        from tkinter import Tk, messagebox
+        root = Tk(); root.withdraw()
+        ans = messagebox.askyesno(title, question, icon='question')
+        root.destroy(); return bool(ans)
+    except Exception:
+        try:
+            resp = input(f"{question} [y/N]: ").strip().lower()
+            return resp in ("y", "yes", "t", "tak")
+        except Exception:
+            return default
+
+# ========= LOG ========= #
+OUTPUT_DIR = None
+LOG_FILE = None
+
+def ensure_parent_dir(p):
+    d = os.path.dirname(p)
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
+
+
+def log(msg: str):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
-    with open(log_file, "a", encoding="utf-8") as lf:
-        lf.write(line + "\n")
+    if LOG_FILE:
+        ensure_parent_dir(LOG_FILE)
+        with open(LOG_FILE, "a", encoding="utf-8") as lf:
+            lf.write(line + "\n")
 
-def get_json_safe(resp):
+# ========= JSON helper ========= #
+
+def json_safe(resp: requests.Response):
     try:
         return resp.json()
     except Exception:
-        log_and_print(f"‼ Nie-JSON z {resp.url} [{resp.status_code}]")
+        log(f"‼ Nie-JSON z {resp.url} [{resp.status_code}] — body: {resp.text[:200]!r}")
         return {}
 
-if os.path.exists(log_file):
-    os.remove(log_file)
-log_and_print(f"Start przetwarzania: {input_file}")
+# ========= Parsowanie pól ========= #
 
-df = pd.read_excel(input_file, engine="openpyxl")
-columns_lower = [c.lower() for c in df.columns]
-
-# --- ROZGAŁĘZIENIE --- #
-if not any(c.lower() == "taxonid" for c in df.columns):
-    # --- TRYB: Brak TaxonId/TaxonID, zostaw obecny kod, np. deduplikacja lub inna logika
-    log_and_print("Nie znaleziono kolumny TaxonId / TaxonID. Skrypt działa w trybie 'bezpośrednim'.")
-    # ... tutaj Twój kod ze starej logiki, np. deduplikacja, export, itp. ...
-    # Przykład: wylistuj kolumny i zakończ
-    print("Kolumny dostępne w pliku:", df.columns.tolist())
-    log_and_print("Zakończono, bo brak TaxonId.")
-    exit(0)
-else:
-    # --- TRYB: Jest TaxonId/TaxonID, przejdź od razu do ETAPU 2 ---
-    # Ustal właściwą nazwę kolumny (z zachowaniem wielkości liter!)
-    col_taxonid = next(c for c in df.columns if c.lower() == "taxonid")
-    df.rename(columns={col_taxonid: "TaxonId"}, inplace=True)
-    log_and_print("Znaleziono kolumnę TaxonId, przechodzę do pobierania statusów ochrony.")
-
-# --- ETAP 2: POBIERANIE PEŁNYCH DANYCH ---
-
-species_url = "https://api.artdatabanken.se/information/v1/speciesdataservice/v1/speciesdata"
-uniq = df[["TaxonId"]].drop_duplicates().copy()
-taxon_ids = uniq["TaxonId"].astype(int).tolist()
-
-def join_list(lst, key, sub=None, sep="; "):
-    if not lst: return ""
+def join_name_with_attr(items, key, sub=None, sep=", "):
+    if not items: return ""
     if sub:
-        return sep.join(sorted(set(f"{x.get(key, '')} ({x.get(sub, '')})" for x in lst if x.get(key))))
-    return sep.join(sorted(set(str(x.get(key, "")) for x in lst if x.get(key))))
+        vals = [f"{it.get(key,'')} ({it.get(sub,'')})" for it in items if it.get(key)]
+    else:
+        vals = [str(it.get(key, "")) for it in items if it.get(key)]
+    vals = sorted(set(v for v in vals if v))
+    return sep.join(vals)
 
-def join_typical_species(ts):
+
+def join_typical_species(ts) -> str:
     if not ts: return ""
-    return "; ".join(sorted(set(f"{t.get('typcial','')} ({', '.join(t.get('regions',[]))})" for t in ts if t.get('typcial'))))
+    vals = []
+    for t in ts:
+        nm = t.get("typcial", "")            # tak się nazywa w API
+        regs = ", ".join(t.get("regions", []) or [])
+        if nm: vals.append(f"{nm}{' ('+regs+')' if regs else ''}")
+    return ", ".join(sorted(set(vals)))
 
-def join_substrate_info(si):
-    if not si: return ""
-    return "; ".join(sorted(set(
-        f"{s.get('name','')} ({s.get('significance','')}, {s.get('use','')})"
-        for s in si if s.get('name')
-    )))
 
-def join_ecogroups(eg):
-    if not eg: return ""
-    return "; ".join(sorted(set(g.get('name','') for g in eg if g.get('active'))))
-
-def get_val(obj, *keys, default=""):
-    for key in keys:
-        if obj is None:
-            return default
-        if isinstance(obj, dict):
-            obj = obj.get(key)
-        elif isinstance(obj, list):
-            try:
-                obj = obj[key]
-            except Exception:
-                return default
-    return obj if obj is not None and obj != "" else default
-
-# REKURENCYJNE zbieranie childów dla wszystkich poziomów (listy ochronne)
 def extract_lists_full(lists):
+    """Rekurencyjnie zbiera wartości z list ochronnych i flag (CITES/Bern/Bonn/Fågeldirektivet/Fridlysta/Prioriterade fågelarter...)."""
     out = {
         "CITES": [],
         "Bernkonventionen": [],
         "Bonnkonventionen": [],
         "PrioriteradeFågelarterSkogsvårdslagen": "",
         "FågeldirektivetBilaga1": "",
-        "Fridlyst": ""
+        "Fridlyst": "",
+        "Frid_text_childs": [],
     }
     def recurse(childs, parent_name=None):
         for c in childs or []:
             name = c.get("name", "")
-            # Załączniki
             if parent_name in ["CITES", "Bernkonventionen", "Bonnkonventionen"] and name:
                 out[parent_name].append(name)
-            # Flagi
             if "Prioriterade fågelarter i skogsvårdslagen" in name:
                 out["PrioriteradeFågelarterSkogsvårdslagen"] = "Ja"
             if "Fågeldirektivet bilaga 1" in name:
                 out["FågeldirektivetBilaga1"] = "Ja"
             if parent_name == "Fridlysta arter":
                 out["Fridlyst"] = "Ja"
-            # Rekurencja głębiej
+                if name:
+                    out["Frid_text_childs"].append(name)
             if c.get("childs"):
                 recurse(c["childs"], parent_name)
     for item in lists or []:
         nm = item.get("name", "")
         if nm in ["CITES", "Bernkonventionen", "Bonnkonventionen", "Fridlysta arter"]:
             recurse(item.get("childs", []), nm)
-        elif nm == "Fåglar":
+        else:
             recurse(item.get("childs", []), nm)
-        elif nm == "Fridlysta arter":
-            out["Fridlyst"] = "Ja"
-    for k in ["CITES", "Bernkonventionen", "Bonnkonventionen"]:
-        out[k] = "; ".join(sorted(set(out[k])))
+    for k in ["CITES", "Bernkonventionen", "Bonnkonventionen", "Frid_text_childs"]:
+        out[k] = ", ".join(sorted(set(out[k])))
     return out
 
-cols = [
-    "ScientificName","SwedishName","DisplayName","Category","ConservationStatus",
-    "RedListCategory","RedListCriterion","RedListPeriodName","RedListCriterionText",
-    "ActionProgramName","ActionProgramStatus","ActionProgramStart","ActionProgramEnd",
-    "ForestrySignal","TypicalSpecies","LandscapeType","Biotopes","CITES","Bernkonventionen",
-    "Bonnkonventionen","PrioriteradeFågelarterSkogsvårdslagen","FågeldirektivetBilaga1",
-    "Fridlyst","Frid_text","ProtectedByWorkProtectionConstitution","ProtectedBirds",
-    "DirectiveAppendix2","DirectiveAppendix2Priority","DirectiveAppendix4","DirectiveAppendix5",
-    "Artikel 17 - 2019",
-    "Characteristic","SpreadAndStatus","Ecology","Threat","ConservationMeasures","Other",
-    "SwedishPresence","ImmigrationHistory","SubstrateInformation","EcologicalGroups",
-    "ConservationEcology","ConservationNatureConservation","ConservationTreeSpecies","AlienSpeciesRiskCategories",
-    "AlienSpeciesEnvironments",
-    "AlienSpeciesEcologyEffect",
-    "AlienSpeciesTaxonLists",
-    "AlienSpeciesInvationPotentials",
-    "AlienSpeciesRegions"
-]
-store = {c: [] for c in cols}
+# ========= Resolve ścieżek ========= #
 
-for idx, tid in enumerate(taxon_ids, start=1):
-    log_and_print(f"— {idx}/{len(taxon_ids)} — TaxonId={tid} —")
-    if tid == 0:
-        for c in cols: store[c].append("")
-        continue
+def resolve_paths():
+    # 1) input: argv → okienko
+    if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+        inp = os.path.abspath(sys.argv[1])
+    else:
+        inp = choose_input_file(os.getcwd())
+    if not inp:
+        print("[BŁĄD] Nie wybrano pliku wejściowego."); sys.exit(1)
 
-    resp = requests.get(f"{species_url}?taxa={tid}", headers=headers_species)
-    data = get_json_safe(resp)
-    obj = data[0]["speciesData"] if isinstance(data, list) and data else {}
+    # 2) output: okienko → folder wejściowy
+    out_dir = choose_output_dir(os.path.dirname(inp)) or os.path.dirname(inp)
 
-    # ScientificName z dwóch poziomów!
-    sci_name = get_val(obj, "scientificName", default="") or get_val(data[0], "scientificName", default="")
-    store["ScientificName"].append(sci_name)
-    store["SwedishName"].append(get_val(obj, "swedishName", default=""))
-    store["DisplayName"].append(get_val(obj, "displayName", default=""))
-    store["Category"].append(get_val(obj, "category", "name", default=""))
-    store["ConservationStatus"].append(get_val(obj, "conservationStatus", default=""))
+    base = os.path.splitext(os.path.basename(inp))[0]
+    return inp, out_dir, base
 
-    # RedList
-    redlist_info = obj.get("redlistInfo", [])
-    red = next((r for r in redlist_info if "2020" in get_val(r,"period","name","")), None)
-    if not red:
-        red = next((r for r in redlist_info if get_val(r,"period","current","") is True), None)
-    if not red and redlist_info: red = redlist_info[0]
-    store["RedListCategory"].append(get_val(red,"category", default=""))
-    store["RedListCriterion"].append(get_val(red,"criterion", default=""))
-    store["RedListPeriodName"].append(get_val(red,"period","name", default=""))
-    store["RedListCriterionText"].append(get_val(red,"criterionText", default=""))
+# ========= MAIN ========= #
 
-    # ActionProgram (natureConservation)
-    nc = obj.get("natureConservation",{})
-    act = nc.get("actionProgram",{})
-    store["ActionProgramName"].append(get_val(act,"program", default=""))
-    store["ActionProgramStatus"].append(get_val(act,"status", default=""))
-    store["ActionProgramStart"].append(get_val(act,"startYear", default=""))
-    store["ActionProgramEnd"].append(get_val(act,"endYear", default=""))
+def main():
+    global OUTPUT_DIR, LOG_FILE
 
-    # ForestrySignal
-    store["ForestrySignal"].append(get_val(nc,"forestryBoardSignalSpecies","apply", default=""))
+    input_path, OUTPUT_DIR, base = resolve_paths()
+    LOG_FILE = os.path.join(OUTPUT_DIR, "log.txt")
 
-    # TypicalSpecies
-    store["TypicalSpecies"].append(join_typical_species(nc.get("typicalSpecies", [])))
+    OUT_WITH    = os.path.join(OUTPUT_DIR, f"{base}_oversikt_with_data.xlsx")
+    OUT_PROT    = os.path.join(OUTPUT_DIR, f"{base}_oversikt_bara_skyddade.xlsx")
+    OUT_ALLROWS = os.path.join(OUTPUT_DIR, f"{base}_ALLROWS_with_data.xlsx")
 
-    # LandscapeType
-    store["LandscapeType"].append(join_list(obj.get("landscapeTypes", []), "name", "status"))
+    # czyść log
+    if os.path.exists(LOG_FILE):
+        try: os.remove(LOG_FILE)
+        except Exception: pass
 
-    # Biotopes
-    store["Biotopes"].append(join_list(obj.get("biotopes", []), "name", "significance"))
+    log(f"Plik wejściowy: {input_path}")
+    log(f"Folder wyjściowy: {OUTPUT_DIR}")
 
-    # Listy ochronne (rekurencyjna nowa wersja!)
-    lists = nc.get("lists", [])
-    lists_data = extract_lists_full(lists)
-    store["CITES"].append(lists_data["CITES"])
-    store["Bernkonventionen"].append(lists_data["Bernkonventionen"])
-    store["Bonnkonventionen"].append(lists_data["Bonnkonventionen"])
-    store["PrioriteradeFågelarterSkogsvårdslagen"].append(lists_data["PrioriteradeFågelarterSkogsvårdslagen"])
-    store["FågeldirektivetBilaga1"].append(lists_data["FågeldirektivetBilaga1"])
-    store["Fridlyst"].append(lists_data["Fridlyst"])
+    # 1) Wczytaj dane i przygotuj TaxonId
+    df = pd.read_excel(input_path, engine="openpyxl")
 
-    # Frid_text – pokaż childy jeśli są
-    fridlysta_texts = []
-    for it in lists or []:
-        if it.get("name") == "Fridlysta arter":
-            fridlysta_texts += [c.get("name") for c in it.get("childs", []) if c.get("name")]
-    fridlyst_text_val = "; ".join(sorted(set(fridlysta_texts))) if fridlysta_texts else ""
-    frid_text = get_val(obj, "speciesFactText", "characteristic", default="")
-    store["Frid_text"].append(fridlyst_text_val if fridlyst_text_val else (frid_text if frid_text != "" else get_val(obj, "protectedText", default="")))
+    # Znajdź kolumnę TaxonId w dowolnej pisowni
+    taxon_col = next((c for c in df.columns if c.lower() == "taxonid"), None)
+    if not taxon_col:
+        raise ValueError("Brak kolumny TaxonId/TaxonID/taxonid w pliku wejściowym.")
+    if taxon_col != "TaxonId":
+        df.rename(columns={taxon_col: "TaxonId"}, inplace=True)
 
-    # Protection & directives
-    store["ProtectedByWorkProtectionConstitution"].append(get_val(nc,"protectedByWorkProtectionConstitution", default=""))
-    store["ProtectedBirds"].append(get_val(nc,"protectedBirds", default=""))
-    store["DirectiveAppendix2"].append(get_val(nc,"habitationDirectiveAppendix2", default=""))
-    store["DirectiveAppendix2Priority"].append(get_val(nc,"habitationDirectiveAppendix2PrioritizedSpecie", default=""))
-    store["DirectiveAppendix4"].append(get_val(nc,"habitationDirectiveAppendix4", default=""))
-    store["DirectiveAppendix5"].append(get_val(nc,"habitationDirectiveAppendix5", default=""))
+    # 2) Wczesna deduplikacja po TaxonId (>0) na potrzeby zapytań do API
+    df_overview = df[pd.to_numeric(df["TaxonId"], errors="coerce").fillna(0) > 0].copy()
+    df_overview["TaxonId"] = df_overview["TaxonId"].astype(int)
+    df_overview = df_overview.sort_values("TaxonId").drop_duplicates(subset=["TaxonId"], keep="first")
+    uniq_ids = df_overview["TaxonId"].tolist()
+    log(f"Unikalnych TaxonId > 0: {len(uniq_ids)} (z {len(df)})")
 
-    # Artikel 17 - 2019 – jeśli jest conservationAssessments z trendami, ew. pusta
-    art17 = ""
-    ca = obj.get("conservationAssessments",{})
-    if isinstance(ca, dict) and "periods" in ca:
-        for p in ca["periods"]:
-            if "2019" in str(p.get("name", "")):
-                for t in p.get("trends", []):
-                    art17 += f"{t.get('category')}: {t.get('evaluation')} ({t.get('trend')}); "
-        art17 = art17.strip("; ")
-    store["Artikel 17 - 2019"].append(art17 if art17 else "")
+    # 3) Pobierz dane z SpeciesDataService
+    cols = [
+        "ScientificName","SwedishName","DisplayName","Category","ConservationStatus",
+        "RedListCategory","RedListCriterion","RedListPeriodName","RedListCriterionText",
+        "ActionProgramName","ActionProgramStatus","ActionProgramStart","ActionProgramEnd",
+        "ForestrySignal","TypicalSpecies","LandscapeType","Biotopes","CITES","Bernkonventionen",
+        "Bonnkonventionen","PrioriteradeFågelarterSkogsvårdslagen","FågeldirektivetBilaga1",
+        "Fridlyst","Frid_text","ProtectedByWorkProtectionConstitution","ProtectedBirds",
+        "DirectiveAppendix2","DirectiveAppendix2Priority","DirectiveAppendix4","DirectiveAppendix5",
+        "Artikel 17 - 2019",
+        "Characteristic","SpreadAndStatus","Ecology","Threat","ConservationMeasures","Other",
+        "SwedishPresence","ImmigrationHistory","SubstrateInformation","EcologicalGroups",
+        "ConservationEcology","ConservationNatureConservation","ConservationTreeSpecies",
+        # Alien (jeśli dostępne)
+        "AlienSpeciesRiskCategories","AlienSpeciesEnvironments","AlienSpeciesEcologyEffect",
+        "AlienSpeciesTaxonLists","AlienSpeciesInvationPotentials","AlienSpeciesRegions",
+    ]
+    store = {c: [] for c in cols}
+    id_bucket = []
 
-    # --- Dodatkowe teksty i dane (speciesFactText)
-    sft = obj.get("speciesFactText",{})
-    store["Characteristic"].append(get_val(sft, "characteristic", default=""))
-    store["SpreadAndStatus"].append(get_val(sft, "spreadAndStatus", default=""))
-    store["Ecology"].append(get_val(sft, "ecology", default=""))
-    store["Threat"].append(get_val(sft, "threat", default=""))
-    store["ConservationMeasures"].append(get_val(sft, "conservationMeasures", default=""))
-    store["Other"].append(get_val(sft, "other", default=""))
+    for k, tid in enumerate(uniq_ids, start=1):
+        log(f"— {k}/{len(uniq_ids)} — TaxonId={tid}")
+        rowvals = {c: "" for c in cols}
+        try:
+            resp = requests.get(f"{SPECIES_URL}?taxa={tid}", headers=HEADERS_SPECIES, timeout=TIMEOUT)
+            if resp.status_code != 200:
+                log(f"  Błąd {resp.status_code} dla TaxonId={tid}: {resp.text[:200]!r}")
+                data = []
+            else:
+                try:
+                    data = resp.json()
+                except Exception:
+                    log(f"‼ Nie-JSON z {resp.url} [{resp.status_code}] — body: {resp.text[:200]!r}")
+                    data = []
+            obj = (data[0] or {}).get("speciesData", {}) if (isinstance(data, list) and data) else {}
 
-    # Presence, immigration
-    tri = obj.get("taxonRelatedInformation",{})
-    store["SwedishPresence"].append(get_val(tri, "swedishPresence", default=""))
-    store["ImmigrationHistory"].append(get_val(tri, "immigrationHistory", default=""))
+            if DEBUG_DUMP_LISTS:
+                try:
+                    lists_raw = (obj.get("natureConservation", {}) or {}).get("lists", [])
+                    with open(os.path.join(OUTPUT_DIR, f"lists_raw_{tid}.json"), "w", encoding="utf-8") as f:
+                        json.dump(lists_raw, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    log(f"  (debug) Nie zapisano lists_raw dla {tid}: {e}")
 
-    # SubstrateInformation
-    store["SubstrateInformation"].append(join_substrate_info(obj.get("substrateInformation", [])))
-    store["EcologicalGroups"].append(join_ecogroups(obj.get("ecologicalGroups", [])))
+            def gv(*keys, default=""):
+                o = obj
+                for ky in keys:
+                    if isinstance(o, dict):
+                        o = o.get(ky)
+                    else:
+                        o = None
+                return o if (o is not None and o != "") else default
 
-    # Conservation assessments (ecology/natureConservation/treeSpecies)
-    ca = obj.get("conservationAssessments",{})
-    store["ConservationEcology"].append(get_val(ca,"ecology", default=""))
-    store["ConservationNatureConservation"].append(get_val(ca,"natureConservation", default=""))
-    store["ConservationTreeSpecies"].append(get_val(ca,"treeSpecies", default=""))
-    
-    # INWAZYJNE
-    alien = obj.get("alienSpeciesRa", {})
-    store["AlienSpeciesRiskCategories"].append("; ".join(alien.get("riskCategories", [])) if alien else "")
-    store["AlienSpeciesEnvironments"].append("; ".join(alien.get("environments", [])) if alien else "")
-    store["AlienSpeciesEcologyEffect"].append("; ".join(alien.get("ecologyEffect", [])) if alien else "")
-    store["AlienSpeciesTaxonLists"].append("; ".join(str(x) for x in alien.get("taxonLists", [])) if alien else "")
-    store["AlienSpeciesInvationPotentials"].append("; ".join(alien.get("invationPotentials", [])) if alien else "")
-    store["AlienSpeciesRegions"].append("; ".join(alien.get("regions", [])) if alien else "")
+            # Podstawowe
+            rowvals["ScientificName"] = gv("scientificName") or (data[0].get("scientificName") if (isinstance(data, list) and data and isinstance(data[0], dict)) else "")
+            rowvals["SwedishName"]    = gv("swedishName")
+            rowvals["DisplayName"]    = gv("displayName")
+            rowvals["Category"]       = gv("category", "name")
+            rowvals["ConservationStatus"] = gv("conservationStatus")
 
-  
+            # Redlist (2020 → current → pierwszy)
+            redlist_info = obj.get("redlistInfo", []) or []
+            red = next((r for r in redlist_info if "2020" in str(((r or {}).get("period") or {}).get("name", ""))), None)
+            if not red:
+                red = next((r for r in redlist_info if ((r or {}).get("period") or {}).get("current") is True), None)
+            if not red and redlist_info:
+                red = redlist_info[0]
+            rowvals["RedListCategory"]     = (red or {}).get("category", "")
+            rowvals["RedListCriterion"]     = (red or {}).get("criterion", "")
+            rowvals["RedListPeriodName"]    = ((red or {}).get("period") or {}).get("name", "")
+            rowvals["RedListCriterionText"] = (red or {}).get("criterionText", "")
 
-# --- scalanie i zapis ---
-result = pd.DataFrame({"TaxonId": taxon_ids})
-for c in cols:
-    result[c] = store[c]
-result.replace(["N/A", "0", 0], "", inplace=True)
-merged = df.merge(result, on="TaxonId", how="left")
-with pd.ExcelWriter(output_file, engine="openpyxl") as w:
-    merged.to_excel(w, index=False)
-log_and_print(f"Zapisano: {output_file}")
+            # NatureConservation
+            nc = obj.get("natureConservation", {}) or {}
+            act = nc.get("actionProgram", {}) or {}
+            rowvals["ActionProgramName"]   = act.get("program", "")
+            rowvals["ActionProgramStatus"] = act.get("status", "")
+            rowvals["ActionProgramStart"]  = act.get("startYear", "")
+            rowvals["ActionProgramEnd"]    = act.get("endYear", "")
+
+            rowvals["ForestrySignal"]  = ((nc.get("forestryBoardSignalSpecies", {}) or {}).get("apply")) or ""
+            rowvals["TypicalSpecies"]  = join_typical_species(nc.get("typicalSpecies", []))
+            rowvals["LandscapeType"]   = join_name_with_attr(obj.get("landscapeTypes", []), "name", "status")
+            rowvals["Biotopes"]        = join_name_with_attr(obj.get("biotopes", []), "name", "significance")
+
+            lists = nc.get("lists", []) or []
+            lists_data = extract_lists_full(lists)
+            rowvals["CITES"]   = lists_data["CITES"]
+            rowvals["Bernkonventionen"] = lists_data["Bernkonventionen"]
+            rowvals["Bonnkonventionen"] = lists_data["Bonnkonventionen"]
+            rowvals["PrioriteradeFågelarterSkogsvårdslagen"] = lists_data["PrioriteradeFågelarterSkogsvårdslagen"]
+            rowvals["FågeldirektivetBilaga1"] = lists_data["FågeldirektivetBilaga1"]
+            rowvals["Fridlyst"] = lists_data["Fridlyst"]
+            # Frid_text — childy jeżeli są, w przeciwnym razie speciesFactText.characteristic lub protectedText
+            rowvals["Frid_text"] = lists_data.get("Frid_text_childs") or ((obj.get("speciesFactText", {}) or {}).get("characteristic") or (obj.get("protectedText") or ""))
+
+            rowvals["ProtectedByWorkProtectionConstitution"] = nc.get("protectedByWorkProtectionConstitution", "") or ""
+            rowvals["ProtectedBirds"] = nc.get("protectedBirds", "") or ""
+            rowvals["DirectiveAppendix2"] = nc.get("habitationDirectiveAppendix2", "") or ""
+            rowvals["DirectiveAppendix2Priority"] = nc.get("habitationDirectiveAppendix2PrioritizedSpecie", "") or ""
+            rowvals["DirectiveAppendix4"] = nc.get("habitationDirectiveAppendix4", "") or ""
+            rowvals["DirectiveAppendix5"] = nc.get("habitationDirectiveAppendix5", "") or ""
+
+            # Artikel 17 - 2019
+            art17 = ""; ca = obj.get("conservationAssessments", {}) or {}
+            for p in (ca.get("periods") or []):
+                if "2019" in str(p.get("name", "")):
+                    chunks = []
+                    for t in (p.get("trends", []) or []):
+                        cat = t.get("category", ""); ev = t.get("evaluation", ""); tr = t.get("trend", "")
+                        part = f"{cat}: {ev}{(' ('+tr+')') if tr else ''}"
+                        if part.strip(): chunks.append(part)
+                    art17 = ", ".join(chunks); break
+            rowvals["Artikel 17 - 2019"] = art17
+
+            # Teksty
+            sft = obj.get("speciesFactText", {}) or {}
+            rowvals["Characteristic"] = sft.get("characteristic", "") or ""
+            rowvals["SpreadAndStatus"] = sft.get("spreadAndStatus", "") or ""
+            rowvals["Ecology"] = sft.get("ecology", "") or ""
+            rowvals["Threat"] = sft.get("threat", "") or ""
+            rowvals["ConservationMeasures"] = sft.get("conservationMeasures", "") or ""
+            rowvals["Other"] = sft.get("other", "") or ""
+
+            tri = obj.get("taxonRelatedInformation", {}) or {}
+            rowvals["SwedishPresence"] = tri.get("swedishPresence", "") or ""
+            rowvals["ImmigrationHistory"] = tri.get("immigrationHistory", "") or ""
+
+            sub = obj.get("substrateInformation", []) or []
+            rowvals["SubstrateInformation"] = join_name_with_attr(sub, "name", sub="use")
+
+            eco = obj.get("ecologicalGroups", []) or []
+            eg = ", ".join(sorted(set(g.get("name", "") for g in eco if g.get("active"))))
+            rowvals["EcologicalGroups"] = eg
+
+            ca = obj.get("conservationAssessments", {}) or {}
+            rowvals["ConservationEcology"] = (ca.get("ecology") or "")
+            rowvals["ConservationNatureConservation"] = (ca.get("natureConservation") or "")
+            rowvals["ConservationTreeSpecies"] = (ca.get("treeSpecies") or "")
+
+            # Alien / gatunki obce (jeśli są)
+            alien = obj.get("alienSpeciesRa", {}) or {}
+            rowvals["AlienSpeciesRiskCategories"]     = ", ".join(alien.get("riskCategories", []) or [])
+            rowvals["AlienSpeciesEnvironments"]       = ", ".join(alien.get("environments", []) or [])
+            rowvals["AlienSpeciesEcologyEffect"]      = ", ".join(alien.get("ecologyEffect", []) or [])
+            rowvals["AlienSpeciesTaxonLists"]         = ", ".join([str(x) for x in (alien.get("taxonLists", []) or [])])
+            rowvals["AlienSpeciesInvationPotentials"] = ", ".join(alien.get("invationPotentials", []) or [])
+            rowvals["AlienSpeciesRegions"]            = ", ".join(alien.get("regions", []) or [])
+
+        except Exception as e:
+            log(f"Błąd dla TaxonId {tid}: {e}")
+        finally:
+            for c in cols: store[c].append(rowvals[c])
+            id_bucket.append(tid)
+            if k % 10 == 0: log(f"→ {k}/{len(uniq_ids)} taksonów ukończono")
+            time.sleep(SPECIES_SLEEP)
+
+    result = pd.DataFrame({"TaxonId": id_bucket})
+    for c in cols: result[c] = store[c]
+    result.replace(["N/A", "0", 0, None], "", inplace=True)
+
+    # ======== OPCJA: ALLROWS (bez deduplikacji) ========
+    save_allrows = ask_yes_no("Pełna tabela bez deduplikacji?", "Czy chcesz zapisać dodatkowy plik z WSZYSTKIMI wierszami (bez usuwania duplikatów)?")
+    if save_allrows:
+        existing_lc_full = {c.lower() for c in df.columns}
+        add_cols_full = [c for c in result.columns if c.lower() not in existing_lc_full]
+        # WAŻNE: zawsze dołączamy klucz łączenia
+        merge_cols_full = ["TaxonId"] + [c for c in add_cols_full if c.lower() != "taxonid"]
+        merged_full = df.merge(result[merge_cols_full], on="TaxonId", how="left")
+        with pd.ExcelWriter(OUT_ALLROWS, engine="openpyxl") as w:
+            merged_full.to_excel(w, index=False)
+        log(f"Zapisano (ALLROWS): {OUT_ALLROWS}")
+
+    # ======== PRZEGLĄD (UNIKALNE) + sort RL ========
+    existing_lc = {c.lower() for c in df_overview.columns}
+    add_cols = [c for c in result.columns if c.lower() not in existing_lc]
+    merge_cols = ["TaxonId"] + [c for c in add_cols if c.lower() != "taxonid"]
+    merged = df_overview.merge(result[merge_cols], on="TaxonId", how="left")
+
+    merged["_rl_order"] = merged["RedListCategory"].astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
+    merged = merged.sort_values(["_rl_order", "SwedishName", "ScientificName"], ascending=[True, True, True])
+    merged.drop(columns=["_rl_order"], inplace=True)
+
+    with pd.ExcelWriter(OUT_WITH, engine="openpyxl") as w:
+        merged.to_excel(w, index=False)
+    log(f"Zapisano: {OUT_WITH}")
+
+    # ======== tylko "chronione" ========
+    protection_columns = [
+        "ConservationStatus", "Artikel 17 - 2019", "TypicalSpecies", "CITES", "Bernkonventionen", "Bonnkonventionen",
+        "PrioriteradeFågelarterSkogsvårdslagen", "FågeldirektivetBilaga1", "ProtectedByWorkProtectionConstitution",
+        "ProtectedBirds", "DirectiveAppendix2", "DirectiveAppendix2Priority", "DirectiveAppendix4", "DirectiveAppendix5",
+        "ForestrySignal", "ActionProgramStatus", "ActionProgramStart", "ActionProgramEnd", "ActionProgramName",
+        "Fridlyst", "Frid_text",
+    ]
+    def has_protection(row) -> bool:
+        empty_vals = {"N/A", "", 0, "0", "Nej", None}
+        return any(row.get(col) not in empty_vals for col in protection_columns)
+
+    only_prot = merged[merged.apply(lambda r: has_protection(r), axis=1)].copy()
+
+    with pd.ExcelWriter(OUT_PROT, engine="openpyxl") as w:
+        only_prot.to_excel(w, index=False)
+    log(f"Zapisano: {OUT_PROT}")
+
+    log("Proces zakończony sukcesem!")
 
 
-
-# === ETAP 3B: Dołączenie danych z Riskklassning2024.xlsx na podstawie TaxonId ===
-risk_file = os.path.join(os.path.dirname(output_file), "Riskklassning2024.xlsx")
-if os.path.exists(risk_file):
-    try:
-        risk_df = pd.read_excel(risk_file, engine="openpyxl")
-        # Ustal właściwą nazwę kolumny TaxonId w risk_df
-        risk_tax_col = [c for c in risk_df.columns if c.lower() == "taxonid"][0]
-        # Wylistuj wszystkie kolumny w risk_df by łatwo wybrać te, które chcesz przenieść
-        print("Kolumny dostępne w Riskklassning2024.xlsx:", risk_df.columns.tolist())
-        # PRZYKŁAD – zmień na wybrane kolumny:
-        risk_cols_to_add = [col for col in risk_df.columns if col != risk_tax_col]  # domyślnie wszystkie poza TaxonId
-
-        # Ogranicz tylko do TaxonId i wybranych
-        risk_df = risk_df[[risk_tax_col] + risk_cols_to_add]
-        # Wczytaj najnowszą wersję merged (po zapisie wyżej)
-        merged_df = pd.read_excel(output_file, engine="openpyxl")
-        # Scal po TaxonId (left join, aby nie tracić żadnego rekordu z głównego pliku)
-        merged_final = merged_df.merge(risk_df, left_on="TaxonId", right_on=risk_tax_col, how="left")
-        # Usuń powielony TaxonId z risk_df jeśli jest (zazwyczaj niepotrzebne, ale bywa)
-        if risk_tax_col != "TaxonId" and risk_tax_col in merged_final.columns:
-            merged_final = merged_final.drop(columns=[risk_tax_col])
-        # Zapisz efekt końcowy pod nową nazwą
-        merged_final.to_excel(output_file, index=False)
-        log_and_print(f"✅ ETAP 3B: Dodano kolumny z Riskklassning2024.xlsx i nadpisano {output_file}")
-    except Exception as e:
-        log_and_print(f"‼ Błąd podczas ETAPU 3B: {e}")
-else:
-    log_and_print("Riskklassning2024.xlsx nie został znaleziony w katalogu! Pomijam ETAP 3B.")
-print("Dziekujemy za skorzystanie z naszego skryptu. W razie wykrytych nieprawidlowosci - obiwniaj ChatGPT oraz poinformuj mnie: jakubpelka@gmail.com")
+if __name__ == "__main__":
+    main()
