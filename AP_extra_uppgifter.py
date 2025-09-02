@@ -2,24 +2,33 @@ import os
 import sys
 import time
 import re
-import json
 import requests
 import pandas as pd
 from datetime import datetime
 
 """
-status_prod_1_no_pubs_V9.py
+AP_extra_uppgifter.py — Artportalen export → enrich (SpeciesDataService) + GEIAA + opcjonalny merge Riskklassning2024.xlsx
 
-Zmiany vs V8:
-- ***Publikacje wyciszone***: całkowicie usunięte/przykryte – brak zapytań do BFF
-  i brak kolumny "PublicationTitles".
-- Reszta bez zmian: okna wyboru pliku i folderu, przełącznik czy zapisać
-  również pełną tabelę bez deduplikacji, dane z SpeciesDataService, sortowanie
-  wg RedListCategory, trzy pliki wynikowe (zależnie od wyboru).
+Funkcje zachowane:
+- Okno wyboru pliku wejściowego (Artportalen export)
+- Okno wyboru folderu zapisu
+- Przełącznik: czy zapisać dodatkowo pełną tabelę BEZ usuwania duplikatów
+- Enrichment z SpeciesDataService (ArtDatabanken)
+- Sortowanie wg RedListCategory (CR, EN, VU, NT, LC, …)
+- 2 (lub 3) pliki wynikowe: full_ (opcjonalnie), with_data (overview, bez duplikatów), bara_skyddade (tylko chronione)
 
-Wymagane klucze środowiskowe (lub ustawione tu stałe):
-- TAXONOMY_KEY  – do taxonservice (dopasowanie nazw -> TaxonId)
-- SPECIES_KEY   – do speciesdataservice (szczegółowe dane)
+Nowości:
+- GEIAA / Obce gatunki: kolumny z speciesData.alienSpeciesRa
+  (AlienSpeciesRiskCategories, AlienSpeciesEnvironments, AlienSpeciesEcologyEffect,
+   AlienSpeciesTaxonLists, AlienSpeciesInvationPotentials, AlienSpeciesRegions)
+- Opcjonalny merge dodatkowego Excela (Riskklassning2024.xlsx / Risklista2024.xlsx / Riskklassning.xlsx)
+  szukany w tym samym folderze co plik WEJŚCIOWY (fallback: folder wyjściowy)
+
+Publikacje (BFF metadata/publications) — WYŁĄCZONE (brak wiarygodnego filtra po taksonie publicznym endpointem).
+
+Wymagane klucze środowiskowe (lub wpisane niżej):
+- TAXONOMY_KEY  – taxonservice (dopasowanie nazw → TaxonId) [tylko jeśli w pliku nie ma TaxonId]
+- SPECIES_KEY   – speciesdataservice (pobieranie danych)
 """
 
 # ==== KLUCZE I ENDPOINTY ====
@@ -43,7 +52,7 @@ from tkinter import filedialog, messagebox
 def pick_inputs():
     root = tk.Tk(); root.withdraw()
     infile = filedialog.askopenfilename(
-        title="Wybierz plik Excel (AGOL / Artportalen)",
+        title="Wybierz plik Excel z Artportalen",
         filetypes=[("Excel", "*.xlsx;*.xls"), ("Wszystkie pliki", "*.*")],
     )
     if not infile:
@@ -58,7 +67,7 @@ def pick_inputs():
         "Czy wygenerować DODATKOWO pełną tabelę BEZ usuwania duplikatów (full_)?",
     )
 
-    paths = {
+    return {
         "INPUT_FILE": infile,
         "OUTDIR": outdir,
         "OUT_FULL": os.path.join(outdir, f"{base}_full_.xlsx"),
@@ -67,7 +76,6 @@ def pick_inputs():
         "LOG_FILE": os.path.join(outdir, f"{base}_log.txt"),
         "WANT_FULL": want_full,
     }
-    return paths
 
 # ==== LOG ====
 LOG_FILE = None
@@ -81,6 +89,7 @@ def log(msg: str):
             lf.write(line + "\n")
 
 # ==== UTILS ====
+import json
 
 def json_safe(resp: requests.Response):
     try:
@@ -207,6 +216,42 @@ def join_typical_species(ts) -> str:
         if nm: vals.append(f"{nm}{' ('+regs+')' if regs else ''}")
     return ", ".join(sorted(set(vals)))
 
+# ==== Riskklassning merge ====
+
+def optional_merge_risk_file(input_dir: str, out_path: str):
+    # Szukaj najpierw w folderze WEJŚCIOWYM, potem w folderze WYJŚCIOWYM
+    candidates = [
+        os.path.join(input_dir, "Riskklassning2024.xlsx"),
+        os.path.join(input_dir, "Risklista2024.xlsx"),
+        os.path.join(input_dir, "Riskklassning.xlsx"),
+        os.path.join(os.path.dirname(out_path), "Riskklassning2024.xlsx"),
+        os.path.join(os.path.dirname(out_path), "Risklista2024.xlsx"),
+        os.path.join(os.path.dirname(out_path), "Riskklassning.xlsx"),
+    ]
+    target = next((p for p in candidates if os.path.exists(p)), None)
+    if not target:
+        log("Riskklassning*.xlsx nie znaleziony — pomijam merge.")
+        return
+    try:
+        df_main = pd.read_excel(out_path, engine="openpyxl")
+        risk_df = pd.read_excel(target, engine="openpyxl")
+        # wykryj kolumnę TaxonId w risk_df
+        risk_tax_col = None
+        for c in risk_df.columns:
+            lc = str(c).strip().lower()
+            if lc == "taxonid" or ("taxon" in lc and "id" in lc):
+                risk_tax_col = c; break
+        if not risk_tax_col:
+            log(f"Risk-plik bez kolumny TaxonId: {os.path.basename(target)} — pomijam.")
+            return
+        merged_final = df_main.merge(risk_df, left_on="TaxonId", right_on=risk_tax_col, how="left", suffixes=("", "_risk"))
+        if risk_tax_col != "TaxonId" and risk_tax_col in merged_final.columns:
+            merged_final.drop(columns=[risk_tax_col], inplace=True)
+        merged_final.to_excel(out_path, index=False)
+        log(f"✅ Dodano kolumny z {os.path.basename(target)} do {os.path.basename(out_path)}")
+    except Exception as e:
+        log(f"‼ Błąd podczas łączenia z risk-plik: {e}")
+
 # ==== GŁÓWNY PRZEPŁYW ====
 
 def main():
@@ -226,16 +271,16 @@ def main():
     df = pd.read_excel(INPUT_FILE, engine="openpyxl")
     orig_cols = list(df.columns)
 
-    def _find_col(possible):
-        poss = [p.lower() for p in possible]
-        for c in df.columns:
-            if c.strip().lower() in poss:
-                return c
+    # wykryj kolumny
+    def _find(df, names):
+        low = {str(c).strip().lower(): c for c in df.columns}
+        for nm in names:
+            if nm.lower() in low: return low[nm.lower()]
         return None
 
-    col_taxonid = _find_col(["taxonid", "taxon_id", "taxon id"]) or ("TaxonId" if "TaxonId" in df.columns else None)
-    col_sv = _find_col(["taxon_svensktnamn", "taxon_svensktNamn", "svensktnamn", "svensk_namn", "svenskt namn"]) or ("taxon_svensktNamn" if "taxon_svensktNamn" in df.columns else None)
-    col_sci = _find_col(["taxon_vetenskapligtnamn", "taxon_vetenskapligtNamn", "vetenskapligtnamn", "vetenskapligt_namn", "vetenskapligt namn"]) or ("taxon_vetenskapligtNamn" if "taxon_vetenskapligtNamn" in df.columns else None)
+    col_taxonid = _find(df, ["taxonid", "taxon_id", "taxon id"])
+    col_sv      = _find(df, ["taxon_svensktnamn", "taxon_svensktNamn", "svensktnamn", "svensk_namn", "svenskt namn"]) or ("taxon_svensktNamn" if "taxon_svensktNamn" in df.columns else None)
+    col_sci     = _find(df, ["taxon_vetenskapligtnamn", "taxon_vetenskapligtNamn", "vetenskapligtnamn", "vetenskapligt_namn", "vetenskapligt namn"]) or ("taxon_vetenskapligtNamn" if "taxon_vetenskapligtNamn" in df.columns else None)
 
     if col_taxonid:
         df["TaxonId"] = pd.to_numeric(df[col_taxonid], errors="coerce").fillna(0).astype("int64")
@@ -261,6 +306,7 @@ def main():
     uniq_ids = sorted(set(int(t) for t in df["TaxonId"].fillna(0).tolist() if t > 0))
     log(f"Pozostało unikalnych TaxonId>0: {len(uniq_ids)} (z {len(df)})")
 
+    # docelowe kolumny — z GEIAA
     cols = [
         "ScientificName","SwedishName","DisplayName","Category","ConservationStatus",
         "RedListCategory","RedListCriterion","RedListPeriodName","RedListCriterionText",
@@ -273,7 +319,9 @@ def main():
         "Characteristic","SpreadAndStatus","Ecology","Threat","ConservationMeasures","Other",
         "SwedishPresence","ImmigrationHistory","SubstrateInformation","EcologicalGroups",
         "ConservationEcology","ConservationNatureConservation","ConservationTreeSpecies",
-        # *** Publikacje wyciszone – żadnej kolumny PublicationTitles ***
+        # --- GEIAA / Alien species ---
+        "AlienSpeciesRiskCategories","AlienSpeciesEnvironments","AlienSpeciesEcologyEffect",
+        "AlienSpeciesTaxonLists","AlienSpeciesInvationPotentials","AlienSpeciesRegions",
     ]
 
     store = {c: [] for c in cols}
@@ -295,6 +343,7 @@ def main():
                         o = None
                 return o if (o is not None and o != "") else default
 
+            # Podstawowe
             sci_name = gv("scientificName") or (data[0].get("scientificName") if (isinstance(data, list) and data and isinstance(data[0], dict)) else "")
             store["ScientificName"].append(sci_name)
             store["SwedishName"].append(gv("swedishName"))
@@ -302,6 +351,7 @@ def main():
             store["Category"].append(gv("category", "name"))
             store["ConservationStatus"].append(gv("conservationStatus"))
 
+            # Redlist
             redlist_info = obj.get("redlistInfo", []) or []
             red = next((r for r in redlist_info if "2020" in str(((r or {}).get("period") or {}).get("name", ""))), None)
             if not red:
@@ -313,6 +363,7 @@ def main():
             store["RedListPeriodName"].append(((red or {}).get("period") or {}).get("name", ""))
             store["RedListCriterionText"].append((red or {}).get("criterionText", ""))
 
+            # Nature conservation
             nc = obj.get("natureConservation", {}) or {}
             act = nc.get("actionProgram", {}) or {}
             store["ActionProgramName"].append(act.get("program", ""))
@@ -358,6 +409,7 @@ def main():
             store["DirectiveAppendix4"].append(nc.get("habitationDirectiveAppendix4", "") or "")
             store["DirectiveAppendix5"].append(nc.get("habitationDirectiveAppendix5", "") or "")
 
+            # Artikel 17 - 2019
             art17 = ""; ca = obj.get("conservationAssessments", {}) or {}
             for p in (ca.get("periods") or []):
                 if "2019" in str(p.get("name", "")):
@@ -369,6 +421,7 @@ def main():
                     art17 = ", ".join(chunks); break
             store["Artikel 17 - 2019"].append(art17)
 
+            # Teksty
             sft = obj.get("speciesFactText", {}) or {}
             store["Characteristic"].append(sft.get("characteristic", "") or "")
             store["SpreadAndStatus"].append(sft.get("spreadAndStatus", "") or "")
@@ -393,6 +446,15 @@ def main():
             store["ConservationNatureConservation"].append((ca.get("natureConservation") or ""))
             store["ConservationTreeSpecies"].append((ca.get("treeSpecies") or ""))
 
+            # --- GEIAA / Alien species ---
+            alien = obj.get("alienSpeciesRa", {}) or {}
+            store["AlienSpeciesRiskCategories"].append("; ".join(alien.get("riskCategories", []) or []))
+            store["AlienSpeciesEnvironments"].append("; ".join(alien.get("environments", []) or []))
+            store["AlienSpeciesEcologyEffect"].append("; ".join(alien.get("ecologyEffect", []) or []))
+            store["AlienSpeciesTaxonLists"].append("; ".join(str(x) for x in (alien.get("taxonLists", []) or [])))
+            store["AlienSpeciesInvationPotentials"].append("; ".join(alien.get("invationPotentials", []) or []))
+            store["AlienSpeciesRegions"].append("; ".join(alien.get("regions", []) or []))
+
             id_bucket.append(tid)
             if k % 10 == 0:
                 log(f"→ {k}/{len(uniq_ids)} taksonów ukończono")
@@ -410,6 +472,7 @@ def main():
     add_cols = [c for c in result.columns if c != "TaxonId" and c not in df.columns]
     full_enriched = df.merge(result[["TaxonId"] + add_cols] if add_cols else df[["TaxonId"]], on="TaxonId", how="left")
 
+    # Sortowanie po RedListCategory (priorytet: CR, EN, VU, NT, LC, …)
     RL_ORDER = {"RE":0, "CR":1, "EN":2, "VU":3, "NT":4, "DD":5, "LC":6, "NA":7, "NE":8}
 
     if paths["WANT_FULL"]:
@@ -421,6 +484,7 @@ def main():
             fe.to_excel(w, index=False)
         log(f"Zapisano: {paths['OUT_FULL']}")
 
+    # Overview: bez duplikatów po TaxonId
     overview = full_enriched[full_enriched["TaxonId"] > 0].drop_duplicates(subset=["TaxonId"], keep="first").copy()
     overview["_rl_order"] = overview["RedListCategory"].astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
     overview = overview.sort_values(["_rl_order", "SwedishName", "ScientificName"], ascending=[True, True, True])
@@ -430,6 +494,7 @@ def main():
         overview.to_excel(w, index=False)
     log(f"Zapisano: {paths['OUT_WITH']}")
 
+    # Tylko chronione
     protection_columns = [
         "ConservationStatus", "Artikel 17 - 2019", "TypicalSpecies", "CITES", "Bernkonventionen", "Bonnkonventionen",
         "PrioriteradeFågelarterSkogsvårdslagen", "FågeldirektivetBilaga1", "ProtectedByWorkProtectionConstitution",
@@ -450,6 +515,9 @@ def main():
     with pd.ExcelWriter(paths["OUT_PROT"], engine="openpyxl") as w:
         protected.to_excel(w, index=False)
     log(f"Zapisano: {paths['OUT_PROT']}")
+
+    # Opcjonalny MERGE: Riskklassning*.xlsx (IN → OUT_WITH)
+    optional_merge_risk_file(os.path.dirname(INPUT_FILE), paths["OUT_WITH"])
 
     log("Proces zakończony sukcesem!")
 
