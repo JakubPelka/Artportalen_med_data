@@ -1,3 +1,21 @@
+# -*- coding: utf-8 -*-
+"""
+AP_extra_uppgifter.py — Artportalen export → enrich
+
+Wersja zsynchronizowana z AGOL:
+• TLS: GET /definitions + POST /taxa → zestawy członków list dla:
+  CITES, Bern, Bonn, Fågeldirektivet Bilaga 1, Prioriterade fågelarter i Skogsvårdslagen,
+  Fridlyst, Habitatdirektivet (Bilaga 2 / 2-prio / 4 / 5) oraz IAS_Union_EU (UE-lista IAS).
+• Fallback: speciesData.natureConservation.lists + protectedText.
+• Frid_text z protectedText; Fridlyst = TLS-membership OR lists/protectedText.
+• Filtr „skyddade”, porządek sortowania RL, czyszczenie „Nej/False → ""”.
+• Tryb DEBUG (opcjonalny) + tls_debug.csv.
+
+Uwaga:
+• IAS_Union_EU jest dodane jako osobna kolumna i czyszczone z „Nej/False”,
+  ale NIE jest uwzględniane w filtrze „bara_skyddade”.
+"""
+
 import os
 import sys
 import time
@@ -5,35 +23,12 @@ import re
 import requests
 import pandas as pd
 from datetime import datetime
-
-"""
-AP_extra_uppgifter.py — Artportalen export → enrich (SpeciesDataService) + GEIAA + opcjonalny merge Riskklassning2024.xlsx
-
-Funkcje zachowane:
-- Okno wyboru pliku wejściowego (Artportalen export)
-- Okno wyboru folderu zapisu
-- Przełącznik: czy zapisać dodatkowo pełną tabelę BEZ usuwania duplikatów
-- Enrichment z SpeciesDataService (ArtDatabanken)
-- Sortowanie wg RedListCategory (CR, EN, VU, NT, LC, …)
-- 2 (lub 3) pliki wynikowe: full_ (opcjonalnie), with_data (overview, bez duplikatów), bara_skyddade (tylko chronione)
-
-Nowości:
-- GEIAA / Obce gatunki: kolumny z speciesData.alienSpeciesRa
-  (AlienSpeciesRiskCategories, AlienSpeciesEnvironments, AlienSpeciesEcologyEffect,
-   AlienSpeciesTaxonLists, AlienSpeciesInvationPotentials, AlienSpeciesRegions)
-- Opcjonalny merge dodatkowego Excela (Riskklassning2024.xlsx / Risklista2024.xlsx / Riskklassning.xlsx)
-  szukany w tym samym folderze co plik WEJŚCIOWY (fallback: folder wyjściowy)
-
-Publikacje (BFF metadata/publications) — WYŁĄCZONE (brak wiarygodnego filtra po taksonie publicznym endpointem).
-
-Wymagane klucze środowiskowe (lub wpisane niżej):
-- TAXONOMY_KEY  – taxonservice (dopasowanie nazw → TaxonId) [tylko jeśli w pliku nie ma TaxonId]
-- SPECIES_KEY   – speciesdataservice (pobieranie danych)
-"""
+from typing import Any, Dict, List, Tuple, Optional, Set
 
 # ==== KLUCZE I ENDPOINTY ====
 TAXONOMY_KEY = os.getenv("TAXONOMY_KEY", "a2753962eba449bbbfdd253baf66fd26")
 SPECIES_KEY  = os.getenv("SPECIES_KEY",  "71c0e472ab954c37896ee2d91f042ff1")
+LISTS_KEY    = os.getenv("LISTS_KEY", os.getenv("SPECIESOBS_KEY", SPECIES_KEY))
 
 NAME_QUERY_SLEEP = 0.08
 SPECIES_SLEEP    = 0.08
@@ -42,10 +37,16 @@ TIMEOUT          = 30
 TAXON_NAME_URL = "https://api.artdatabanken.se/taxonservice/v1/taxa/names"
 SPECIES_URL    = "https://api.artdatabanken.se/information/v1/speciesdataservice/v1/speciesdata"
 
+# TLS
+TLS_BASE       = os.getenv("TLS_BASE", "https://api.artdatabanken.se/taxonlistservice/v1")
+TLS_DEFS_URL   = f"{TLS_BASE}/definitions"
+TLS_TAXA_URL   = f"{TLS_BASE}/taxa"   # POST {"conservationListIds":[...], "outputFields":["id"]}
+
 HEADERS_TAXON   = {"Ocp-Apim-Subscription-Key": TAXONOMY_KEY, "Accept": "application/json"}
 HEADERS_SPECIES = {"Ocp-Apim-Subscription-Key": SPECIES_KEY,   "Accept": "application/json", "Cache-Control": "no-cache"}
+HEADERS_LISTS   = {"Ocp-Apim-Subscription-Key": LISTS_KEY,     "Accept": "application/json"}
 
-# ==== TKINTER – wybór pliku/folderu i przełącznik ====
+# ==== TKINTER – wybór pliku/folderu i przełączniki ====
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -66,6 +67,10 @@ def pick_inputs():
         "Dodatkowy plik?",
         "Czy wygenerować DODATKOWO pełną tabelę BEZ usuwania duplikatów (full_)?",
     )
+    want_debug = messagebox.askyesno(
+        "Tryb debug?",
+        "Włączyć DEBUG (szerszy log + tls_debug.csv)?",
+    )
 
     return {
         "INPUT_FILE": infile,
@@ -74,22 +79,30 @@ def pick_inputs():
         "OUT_WITH": os.path.join(outdir, f"{base}_with_data.xlsx"),
         "OUT_PROT": os.path.join(outdir, f"{base}_bara_skyddade.xlsx"),
         "LOG_FILE": os.path.join(outdir, f"{base}_log.txt"),
+        "DBG_FILE": os.path.join(outdir, "tls_debug.csv"),
         "WANT_FULL": want_full,
+        "DEBUG": want_debug,
     }
 
 # ==== LOG ====
-LOG_FILE = None
+LOG_FILE: Optional[str] = None
+DEBUG: bool = False
+DEBUG_ROWS: List[Dict[str, Any]] = []
 
 def log(msg: str):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
     if LOG_FILE:
-        with open(LOG_FILE, "a", encoding="utf-8") as lf:
-            lf.write(line + "\n")
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as lf:
+                lf.write(line + "\n")
+        except Exception:
+            pass
 
 # ==== UTILS ====
-import json
+_CLEAN_SCI_RE = re.compile(r"\b(sp\.|cf\.|aff\.|nr\.|gr\.)\b|[\?\(\)\[\]]", re.IGNORECASE)
+_DEFUZZ_REPLACEMENTS = {"´": "'", "`": "'", "—": "-", "–": "-"}
 
 def json_safe(resp: requests.Response):
     try:
@@ -99,27 +112,32 @@ def json_safe(resp: requests.Response):
         log(f"‼ Nie-JSON z {url} [{sc}] — body: {tb[:200]!r}")
         return {}
 
-_CLEAN_SCI_RE = re.compile(r"\b(sp\.|cf\.|aff\.|nr\.|gr\.)\b|[\?\(\)\[\]]", re.IGNORECASE)
-_DEFUZZ_REPLACEMENTS = {"  ": " ", "´": "'", "`": "'", "—": "-", "–": "-"}
-
 def clean_scientific(name: str) -> str:
     if not isinstance(name, str):
         return ""
-    s = name.strip()
-    s = _CLEAN_SCI_RE.sub("", s)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
+    s = _CLEAN_SCI_RE.sub("", (name or "").strip())
+    return re.sub(r"\s+", " ", s)
 
 def clean_swedish(name: str) -> str:
     if not isinstance(name, str):
         return ""
-    s = name.strip()
+    s = (name or "").strip()
     for k, v in _DEFUZZ_REPLACEMENTS.items():
         s = s.replace(k, v)
-    s = re.sub(r"s{3,}", "ss", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s+", " ", s)
-    return s
+    return re.sub(r"\s+", " ", s)
 
+def normkey(x: str) -> str:
+    return re.sub(r"\s+", " ", (x or "").strip()).lower()
+
+def bool_to_ja(v) -> str:
+    if isinstance(v, bool):
+        return "Ja" if v else ""
+    s = str(v).strip().lower()
+    if s in {"true", "1", "ja", "yes", "y"}:
+        return "Ja"
+    return ""
+
+# ==== TAXON ID (gdy brak w wejściu) ====
 def query_taxon_id_by_name(name: str, field: str) -> int:
     params = {
         "searchString": name,
@@ -134,16 +152,18 @@ def query_taxon_id_by_name(name: str, field: str) -> int:
     if resp.status_code != 200:
         log(f"Błąd {resp.status_code} przy wyszukiwaniu '{name}' ({field}): {resp.text[:200]!r}")
         return 0
-    data = resp.json().get("data", []) if resp.content else []
+    data = (resp.json() or {}).get("data", []) if resp.content else []
     if not data:
         return 0
-    name_l = name.lower()
+    name_l = (name or "").lower()
     def _pick_id(item):
         ti = item.get("taxonInformation", {})
         return int(ti.get("taxonId", 0) or 0)
-    exact = [d for d in data if any((str(d.get("displayName", "")).lower() == name_l,
-                                     str(d.get("swedishName", "")).lower() == name_l,
-                                     str(d.get("scientificName", "")).lower() == name_l))]
+    exact = [d for d in data if any((
+        str(d.get("displayName", "")).lower() == name_l,
+        str(d.get("swedishName", "")).lower() == name_l,
+        str(d.get("scientificName", "")).lower() == name_l,
+    ))]
     if exact:
         return _pick_id(exact[0])
     recommended = [d for d in data if d.get("isRecommended") is True]
@@ -154,27 +174,23 @@ def query_taxon_id_by_name(name: str, field: str) -> int:
 def resolve_taxon_id(row, sv_col, sci_col) -> int:
     swe = str(row.get(sv_col, "") or "").strip() if sv_col else ""
     sci = str(row.get(sci_col, "") or "").strip() if sci_col else ""
-
-    tried = []
     if swe:
-        tid = query_taxon_id_by_name(swe, "Swedish"); tried.append(("Swedish", swe, tid))
+        tid = query_taxon_id_by_name(swe, "Swedish")
         if tid: return tid
         cs = clean_swedish(swe)
         if cs and cs != swe:
-            tid = query_taxon_id_by_name(cs, "Swedish"); tried.append(("Swedish(clean)", cs, tid))
+            tid = query_taxon_id_by_name(cs, "Swedish")
             if tid: return tid
     if sci:
         csci = clean_scientific(sci)
-        for cand, tag in [(csci, "Scientific(clean)"), (sci, "Scientific")]:
+        for cand in (csci, sci):
             if cand:
-                tid = query_taxon_id_by_name(cand, "Scientific"); tried.append((tag, cand, tid))
+                tid = query_taxon_id_by_name(cand, "Scientific")
                 if tid: return tid
-    pretty = "; ".join([f"{t}:{n} -> {tid}" for (t, n, tid) in tried]) or "(brak prób)"
-    log(f"Brak TaxonId — swe='{swe}' sci='{sci}'. Próby: {pretty}")
+    log(f"Brak TaxonId — swe='{swe}' sci='{sci}'")
     return 0
 
 # ====== SpeciesDataService helpers ======
-
 def extract_child_names(childs):
     out = []
     for c in (childs or []):
@@ -211,15 +227,147 @@ def join_typical_species(ts) -> str:
     if not ts: return ""
     vals = []
     for t in ts:
-        nm = t.get("typcial", "")
+        nm = t.get("typcial", "") or t.get("name", "")
         regs = ", ".join(t.get("regions", []) or [])
         if nm: vals.append(f"{nm}{' ('+regs+')' if regs else ''}")
     return ", ".join(sorted(set(vals)))
 
-# ==== Riskklassning merge ====
+# ==== TLS: /definitions + /taxa ====
+_TLS_DEFS: Dict[int, str] = {}
+_TLS_CATSETS: Dict[str, Set[int]] = {}
+_TLS_DEFS_READY = False
+_TLS_MEMBERS: Dict[str, Set[int]] = {}
 
+def _norm(s: str) -> str:
+    return normkey(s).replace("å", "a").replace("ä", "a").replace("ö", "o")
+
+def fetch_tls_definitions():
+    """Mapa ID→nazwa + zbiory ID interesujących list."""
+    global _TLS_DEFS, _TLS_CATSETS, _TLS_DEFS_READY
+    _TLS_DEFS, _TLS_CATSETS, _TLS_DEFS_READY = {}, {}, False
+    try:
+        r = requests.get(TLS_DEFS_URL, headers=HEADERS_LISTS, timeout=TIMEOUT)
+        if r.status_code != 200:
+            log(f"TLS /definitions {r.status_code}: {r.text[:160]!r}")
+            return
+        defs = json_safe(r) or {}
+        lists = defs.get("conservationLists", []) or []
+        for it in lists:
+            lid = it.get("id"); name = it.get("name") or ""
+            if isinstance(lid, int) and name:
+                _TLS_DEFS[lid] = name
+
+        def find_ids_by_contains(substrs: List[str]) -> Set[int]:
+            out: Set[int] = set()
+            for lid, name in _TLS_DEFS.items():
+                n = _norm(name)
+                if any(sub in n for sub in substrs):
+                    out.add(lid)
+            return out
+
+        _TLS_CATSETS = {
+            "CITES": find_ids_by_contains(["cites"]),
+            "Bernkonventionen": find_ids_by_contains(["bern"]),
+            "Bonnkonventionen": find_ids_by_contains(["bonn", "cms"]),
+            "FågeldirektivetBilaga1": find_ids_by_contains(["fageldirektivet bilaga 1", "fågeldirektivet bilaga 1"]),
+            "PrioriteradeFågelarterSkogsvårdslagen": find_ids_by_contains([
+                "prioriterade fagelarter i skogsvardslagen",
+                "prioriterade fågelarter i skogsvårdslagen",
+                "skogsvardslagen","skogsvårdslagen"
+            ]),
+            "Fridlyst": find_ids_by_contains(["fridlysta arter", "fridlysta faglar", "fridlysta fåglar", "fridlysta"]),
+            # Habitatdirektivet – bilagor
+            "Habitat_Bilaga2": find_ids_by_contains([
+                "habitatdirektivets bilaga 2", "habitatdirektivet bilaga 2", "bilaga 2"
+            ]),
+            "Habitat_Bilaga2_Prio": find_ids_by_contains([
+                "habitatdirektivets bilaga 2", "habitatdirektivet bilaga 2", "prioriterad", "prioriterade", "priority"
+            ]),
+            "Habitat_Bilaga4": find_ids_by_contains([
+                "habitatdirektivets bilaga 4", "habitatdirektivet bilaga 4", "bilaga 4"
+            ]),
+            "Habitat_Bilaga5": find_ids_by_contains([
+                "habitatdirektivets bilaga 5", "habitatdirektivet bilaga 5", "bilaga 5"
+            ]),
+            # IAS – UE-förteckningen / Union list
+            "IAS_Union_EU": find_ids_by_contains([
+                "invasiv", "invasiva", "frammande", "eu-forteckning", "eu forteckning",
+                "unionsforteckning", "union list", "eu list"
+            ]),
+        }
+
+        _TLS_DEFS_READY = True
+        if DEBUG:
+            for cat, ids in _TLS_CATSETS.items():
+                sample = ", ".join([f"{i}:{_TLS_DEFS.get(i,'?')[:24]}" for i in list(sorted(ids))[:6]])
+                log(f"  → {cat}: {len(ids)} id ({sample})")
+    except Exception as e:
+        log(f"TLS /definitions wyjątek: {e}")
+
+def tls_fetch_members_for_list_ids(list_ids: Set[int]) -> Set[int]:
+    """Zwraca zbiór TaxonId należących do dowolnej z list w list_ids (POST /taxa)."""
+    if not list_ids:
+        return set()
+    try:
+        payload = {"conservationListIds": sorted(list(list_ids)), "outputFields": ["id"]}
+        r = requests.post(TLS_TAXA_URL, headers=HEADERS_LISTS, json=payload, timeout=TIMEOUT)
+        if r.status_code != 200 or not r.content:
+            log(f"TLS /taxa {r.status_code} — {r.text[:200]!r}")
+            return set()
+        data = json_safe(r)
+
+        members: Set[int] = set()
+        def walk(x):
+            if isinstance(x, dict):
+                if "id" in x and isinstance(x.get("id"), int):
+                    members.add(int(x["id"]))
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for it in x:
+                    walk(it)
+        walk(data)
+        if DEBUG:
+            if members:
+                preview = ", ".join(str(i) for i in sorted(list(members))[:12])
+                log(f"     ↳ członków: {len(members)} (przykład: {preview})")
+            else:
+                log("     ↳ członków: 0")
+        return members
+    except Exception as e:
+        log(f"TLS /taxa wyjątek: {e}")
+        return set()
+
+def tls_build_memberships():
+    """Buduje _TLS_MEMBERS: nazwa-kategorii → zbiór TaxonId."""
+    global _TLS_MEMBERS
+    _TLS_MEMBERS = {}
+    for cat, ids in _TLS_CATSETS.items():
+        mem = tls_fetch_members_for_list_ids(ids)
+        _TLS_MEMBERS[cat] = mem
+        log(f"TLS /taxa: {cat} — {len(mem)} taxa")
+
+def tls_flags_by_membership(tid: int) -> Dict[str, str]:
+    def hit(cat: str) -> str:
+        return "Ja" if tid in _TLS_MEMBERS.get(cat, set()) else ""
+    return {
+        "CITES": hit("CITES"),
+        "Bernkonventionen": hit("Bernkonventionen"),
+        "Bonnkonventionen": hit("Bonnkonventionen"),
+        "FågeldirektivetBilaga1": hit("FågeldirektivetBilaga1"),
+        "PrioriteradeFågelarterSkogsvårdslagen": hit("PrioriteradeFågelarterSkogsvårdslagen"),
+        "Fridlyst": hit("Fridlyst"),
+        # Habitat
+        "DirectiveAppendix2": hit("Habitat_Bilaga2"),
+        "DirectiveAppendix2Priority": hit("Habitat_Bilaga2_Prio"),
+        "DirectiveAppendix4": hit("Habitat_Bilaga4"),
+        "DirectiveAppendix5": hit("Habitat_Bilaga5"),
+        # IAS (Union list)
+        "IAS_Union_EU": hit("IAS_Union_EU"),
+    }
+
+# ==== Riskklassning merge (jak wcześniej) ====
 def optional_merge_risk_file(input_dir: str, out_path: str):
-    # Szukaj najpierw w folderze WEJŚCIOWYM, potem w folderze WYJŚCIOWYM
     candidates = [
         os.path.join(input_dir, "Riskklassning2024.xlsx"),
         os.path.join(input_dir, "Risklista2024.xlsx"),
@@ -235,7 +383,6 @@ def optional_merge_risk_file(input_dir: str, out_path: str):
     try:
         df_main = pd.read_excel(out_path, engine="openpyxl")
         risk_df = pd.read_excel(target, engine="openpyxl")
-        # wykryj kolumnę TaxonId w risk_df
         risk_tax_col = None
         for c in risk_df.columns:
             lc = str(c).strip().lower()
@@ -253,17 +400,19 @@ def optional_merge_risk_file(input_dir: str, out_path: str):
         log(f"‼ Błąd podczas łączenia z risk-plik: {e}")
 
 # ==== GŁÓWNY PRZEPŁYW ====
-
 def main():
-    global LOG_FILE
+    global LOG_FILE, DEBUG, DEBUG_ROWS
     paths = pick_inputs()
     INPUT_FILE = paths["INPUT_FILE"]; OUTDIR = paths["OUTDIR"]
     OUT_FULL = paths["OUT_FULL"]; OUT_WITH = paths["OUT_WITH"]; OUT_PROT = paths["OUT_PROT"]
-    LOG_FILE = paths["LOG_FILE"]; WANT_FULL = paths["WANT_FULL"]
+    LOG_FILE = paths["LOG_FILE"]; DBG_FILE = paths["DBG_FILE"]
+    WANT_FULL = paths["WANT_FULL"]; DEBUG = bool(paths["DEBUG"])
+    DEBUG_ROWS = []
 
     try:
         if os.path.exists(LOG_FILE): os.remove(LOG_FILE)
-    except Exception: pass
+    except Exception:
+        pass
 
     log(f"Plik wejściowy: {INPUT_FILE}")
     log(f"Folder wyjściowy: {OUTDIR}")
@@ -306,22 +455,33 @@ def main():
     uniq_ids = sorted(set(int(t) for t in df["TaxonId"].fillna(0).tolist() if t > 0))
     log(f"Pozostało unikalnych TaxonId>0: {len(uniq_ids)} (z {len(df)})")
 
-    # docelowe kolumny — z GEIAA
+    # TLS definitions + memberships
+    fetch_tls_definitions()
+    if _TLS_DEFS_READY:
+        tls_build_memberships()
+    else:
+        log("TLS: /definitions niedostępne — użyję tylko fallbacków z SpeciesDataService.")
+
+    # docelowe kolumny (dodano IAS_Union_EU na końcu)
     cols = [
         "ScientificName","SwedishName","DisplayName","Category","ConservationStatus",
         "RedListCategory","RedListCriterion","RedListPeriodName","RedListCriterionText",
         "ActionProgramName","ActionProgramStatus","ActionProgramStart","ActionProgramEnd",
-        "ForestrySignal","TypicalSpecies","LandscapeType","Biotopes","CITES","Bernkonventionen",
-        "Bonnkonventionen","PrioriteradeFågelarterSkogsvårdslagen","FågeldirektivetBilaga1",
+        "ForestrySignal","ForestrySignalSpecies",
+        "TypicalSpecies","LandscapeType","Biotopes",
+        "CITES","Bernkonventionen","Bonnkonventionen",
+        "PrioriteradeFågelarterSkogsvårdslagen","FågeldirektivetBilaga1",
         "Fridlyst","Frid_text","ProtectedByWorkProtectionConstitution","ProtectedBirds",
         "DirectiveAppendix2","DirectiveAppendix2Priority","DirectiveAppendix4","DirectiveAppendix5",
         "Artikel 17 - 2019",
         "Characteristic","SpreadAndStatus","Ecology","Threat","ConservationMeasures","Other",
         "SwedishPresence","ImmigrationHistory","SubstrateInformation","EcologicalGroups",
         "ConservationEcology","ConservationNatureConservation","ConservationTreeSpecies",
-        # --- GEIAA / Alien species ---
+        # GEIAA / Alien species
         "AlienSpeciesRiskCategories","AlienSpeciesEnvironments","AlienSpeciesEcologyEffect",
         "AlienSpeciesTaxonLists","AlienSpeciesInvationPotentials","AlienSpeciesRegions",
+        # TLS IAS Union list:
+        "IAS_Union_EU",
     ]
 
     store = {c: [] for c in cols}
@@ -329,13 +489,15 @@ def main():
 
     for k, tid in enumerate(uniq_ids, start=1):
         log(f"— {k}/{len(uniq_ids)} — TaxonId={tid}")
+        dbg: Dict[str, Any] = {"TaxonId": tid}
         try:
-            resp = requests.get(f"{SPECIES_URL}?taxa={tid}", headers=HEADERS_SPECIES, timeout=TIMEOUT)
+            resp = requests.get(f"{SPECIES_URL}?taxa={tid}&culture=sv-SE", headers=HEADERS_SPECIES, timeout=TIMEOUT)
             data = json_safe(resp) if resp and resp.status_code == 200 else []
-            obj = (data[0] or {}).get("speciesData", {}) if (isinstance(data, list) and data) else {}
+            item = (data[0] if isinstance(data, list) and data else data) or {}
+            obj = item.get("speciesData", item) or {}
 
             def gv(*keys, default=""):
-                o = obj
+                o: Any = obj
                 for ky in keys:
                     if isinstance(o, dict):
                         o = o.get(ky)
@@ -344,8 +506,7 @@ def main():
                 return o if (o is not None and o != "") else default
 
             # Podstawowe
-            sci_name = gv("scientificName") or (data[0].get("scientificName") if (isinstance(data, list) and data and isinstance(data[0], dict)) else "")
-            store["ScientificName"].append(sci_name)
+            store["ScientificName"].append(obj.get("scientificName") or item.get("scientificName") or "")
             store["SwedishName"].append(gv("swedishName"))
             store["DisplayName"].append(gv("displayName"))
             store["Category"].append(gv("category", "name"))
@@ -363,6 +524,9 @@ def main():
             store["RedListPeriodName"].append(((red or {}).get("period") or {}).get("name", ""))
             store["RedListCriterionText"].append((red or {}).get("criterionText", ""))
 
+            # TLS MEMBERSHIP
+            tls_flags = tls_flags_by_membership(tid) if (_TLS_DEFS_READY and _TLS_MEMBERS) else {}
+
             # Nature conservation
             nc = obj.get("natureConservation", {}) or {}
             act = nc.get("actionProgram", {}) or {}
@@ -370,47 +534,90 @@ def main():
             store["ActionProgramStatus"].append(act.get("status", ""))
             store["ActionProgramStart"].append(act.get("startYear", ""))
             store["ActionProgramEnd"].append(act.get("endYear", ""))
+
+            # ForestrySignal + species-lista
             store["ForestrySignal"].append(((nc.get("forestryBoardSignalSpecies", {}) or {}).get("apply")) or "")
+            fs_names = []
+            fss = (nc.get("forestryBoardSignalSpecies") or {})
+            def _add_names(val):
+                if isinstance(val, list):
+                    for el in val:
+                        if isinstance(el, dict):
+                            nm = el.get("name") or el.get("swedishName") or el.get("displayName") or el.get("scientificName")
+                            if nm: fs_names.append(str(nm))
+                        elif isinstance(el, str):
+                            if el.strip(): fs_names.append(el.strip())
+                elif isinstance(val, dict):
+                    nm = val.get("name") or val.get("swedishName") or val.get("displayName") or val.get("scientificName")
+                    if nm: fs_names.append(str(nm))
+                elif isinstance(val, str) and val.strip():
+                    fs_names.append(val.strip())
+            if isinstance(fss, dict):
+                for key in ("speciesNames","species","names","speciesList","items"):
+                    _add_names(fss.get(key))
+            elif isinstance(fss, list):
+                _add_names(fss)
+            store["ForestrySignalSpecies"].append("; ".join(sorted(set(n for n in fs_names if n))))
+
             store["TypicalSpecies"].append(join_typical_species(nc.get("typicalSpecies", [])))
             store["LandscapeType"].append(join_name_with_attr(obj.get("landscapeTypes", []), "name", "status"))
             store["Biotopes"].append(join_name_with_attr(obj.get("biotopes", []), "name", "significance"))
 
+            # Fallback lists scanner
             lists = nc.get("lists", []) or []
-            def get_from_lists(lists, list_name):
-                vals = []
-                for it in lists:
-                    if it.get("name") == list_name:
-                        vals += extract_child_names(it.get("childs"))
-                vals = sorted(set(v for v in vals if v))
-                return ", ".join(vals)
+            def has_list_flag(_lists, list_name: str) -> str:
+                ln = (list_name or "").strip().lower()
+                for it in (_lists or []):
+                    nm = str(it.get("name", "")).strip().lower()
+                    title = str(it.get("title", "")).strip().lower()
+                    if ln and (ln == nm or ln in nm or ln in title):
+                        return "Ja"
+                    if any_child_named([it], list_name) == "Ja":
+                        return "Ja"
+                return ""
 
-            store["CITES"].append(get_from_lists(lists, "CITES"))
-            store["Bernkonventionen"].append(get_from_lists(lists, "Bernkonventionen"))
-            store["Bonnkonventionen"].append(get_from_lists(lists, "Bonnkonventionen"))
-            store["PrioriteradeFågelarterSkogsvårdslagen"].append(any_child_named(lists, "Prioriterade fågelarter i skogsvårdslagen"))
-            store["FågeldirektivetBilaga1"].append(any_child_named(lists, "Fågeldirektivet bilaga 1"))
-            store["Fridlyst"].append(any_child_named(lists, "Fridlysta arter"))
+            fb_cites = has_list_flag(lists, "CITES")
+            fb_bern  = has_list_flag(lists, "Bernkonventionen")
+            fb_bonn  = has_list_flag(lists, "Bonnkonventionen")
+            fb_prio  = has_list_flag(lists, "Prioriterade fågelarter i skogsvårdslagen")
+            fb_fd1   = has_list_flag(lists, "Fågeldirektivet bilaga 1")
 
-            frid_names = []
-            for it in lists:
-                if it.get("name") == "Fridlysta arter":
-                    frid_names += [c.get("name") for c in (it.get("childs") or []) if c.get("name")]
-            frid_names = ", ".join(sorted(set(frid_names))) if frid_names else ""
-            if frid_names:
-                store["Frid_text"].append(frid_names)
-            else:
-                sft_char = ((obj.get("speciesFactText", {}) or {}).get("characteristic")) or ""
-                store["Frid_text"].append(sft_char if sft_char else (obj.get("protectedText") or ""))
+            store["CITES"].append(tls_flags.get("CITES") or fb_cites)
+            store["Bernkonventionen"].append(tls_flags.get("Bernkonventionen") or fb_bern)
+            store["Bonnkonventionen"].append(tls_flags.get("Bonnkonventionen") or fb_bonn)
+            store["PrioriteradeFågelarterSkogsvårdslagen"].append(tls_flags.get("PrioriteradeFågelarterSkogsvårdslagen") or fb_prio)
+            store["FågeldirektivetBilaga1"].append(tls_flags.get("FågeldirektivetBilaga1") or fb_fd1)
+
+            # FRIDLYST + Frid_text
+            prot_txt = (obj.get("protectedText") or "").strip()
+            frid_flag = tls_flags.get("Fridlyst") or has_list_flag(lists, "Fridlysta arter") or has_list_flag(lists, "Fridlysta fåglar")
+            if not frid_flag and prot_txt and ("fridlyst" in prot_txt.lower()):
+                frid_flag = "Ja"
+            store["Fridlyst"].append(frid_flag or "")
+            store["Frid_text"].append(prot_txt or ""
+
+            )
+
+            # Habitatdirektivet (SpeciesData → fallback) + TLS
+            sd_hd2  = bool_to_ja(nc.get("habitatDirectiveAppendix2") or nc.get("habitatdirectiveappendix2"))
+            sd_hd2p = bool_to_ja(nc.get("habitatDirectiveAppendix2PrioritizedSpecie")
+                                 or nc.get("habitatDirectiveAppendix2PrioritizedSpecies")
+                                 or nc.get("habitatdirectiveappendix2prioritizedspecie")
+                                 or nc.get("habitatdirectiveappendix2prioritizedspecies"))
+            sd_hd4  = bool_to_ja(nc.get("habitatDirectiveAppendix4") or nc.get("habitatdirectiveappendix4"))
+            sd_hd5  = bool_to_ja(nc.get("habitatDirectiveAppendix5") or nc.get("habitatdirectiveappendix5"))
+
+            store["DirectiveAppendix2"].append(tls_flags.get("DirectiveAppendix2") or sd_hd2)
+            store["DirectiveAppendix2Priority"].append(tls_flags.get("DirectiveAppendix2Priority") or sd_hd2p)
+            store["DirectiveAppendix4"].append(tls_flags.get("DirectiveAppendix4") or sd_hd4)
+            store["DirectiveAppendix5"].append(tls_flags.get("DirectiveAppendix5") or sd_hd5)
 
             store["ProtectedByWorkProtectionConstitution"].append(nc.get("protectedByWorkProtectionConstitution", "") or "")
             store["ProtectedBirds"].append(nc.get("protectedBirds", "") or "")
-            store["DirectiveAppendix2"].append(nc.get("habitationDirectiveAppendix2", "") or "")
-            store["DirectiveAppendix2Priority"].append(nc.get("habitationDirectiveAppendix2PrioritizedSpecie", "") or "")
-            store["DirectiveAppendix4"].append(nc.get("habitationDirectiveAppendix4", "") or "")
-            store["DirectiveAppendix5"].append(nc.get("habitationDirectiveAppendix5", "") or "")
 
             # Artikel 17 - 2019
-            art17 = ""; ca = obj.get("conservationAssessments", {}) or {}
+            art17 = ""
+            ca = obj.get("conservationAssessments", {}) or {}
             for p in (ca.get("periods") or []):
                 if "2019" in str(p.get("name", "")):
                     chunks = []
@@ -441,10 +648,10 @@ def main():
             eg = ", ".join(sorted(set(g.get("name", "") for g in eco if g.get("active"))))
             store["EcologicalGroups"].append(eg)
 
-            ca = obj.get("conservationAssessments", {}) or {}
-            store["ConservationEcology"].append((ca.get("ecology") or ""))
-            store["ConservationNatureConservation"].append((ca.get("natureConservation") or ""))
-            store["ConservationTreeSpecies"].append((ca.get("treeSpecies") or ""))
+            ca2 = obj.get("conservationAssessments", {}) or {}
+            store["ConservationEcology"].append((ca2.get("ecology") or ""))
+            store["ConservationNatureConservation"].append((ca2.get("natureConservation") or ""))
+            store["ConservationTreeSpecies"].append((ca2.get("treeSpecies") or ""))
 
             # --- GEIAA / Alien species ---
             alien = obj.get("alienSpeciesRa", {}) or {}
@@ -455,8 +662,28 @@ def main():
             store["AlienSpeciesInvationPotentials"].append("; ".join(alien.get("invationPotentials", []) or []))
             store["AlienSpeciesRegions"].append("; ".join(alien.get("regions", []) or []))
 
+            # --- IAS (Union list) z TLS ---
+            store["IAS_Union_EU"].append(tls_flags.get("IAS_Union_EU", ""))
+
+            if DEBUG:
+                dbg.update({
+                    "SwedishName": store["SwedishName"][-1],
+                    "ScientificName": store["ScientificName"][-1],
+                    "TLS_CITES": store["CITES"][-1],
+                    "TLS_Bern": store["Bernkonventionen"][-1],
+                    "TLS_Bonn": store["Bonnkonventionen"][-1],
+                    "TLS_FD1": store["FågeldirektivetBilaga1"][-1],
+                    "TLS_Prio": store["PrioriteradeFågelarterSkogsvårdslagen"][-1],
+                    "TLS_Fridlyst": store["Fridlyst"][-1],
+                    "TLS_HD2": store["DirectiveAppendix2"][-1],
+                    "TLS_HD2P": store["DirectiveAppendix2Priority"][-1],
+                    "TLS_HD4": store["DirectiveAppendix4"][-1],
+                    "TLS_HD5": store["DirectiveAppendix5"][-1],
+                    "TLS_IAS_Union_EU": store["IAS_Union_EU"][-1],
+                })
+
             id_bucket.append(tid)
-            if k % 10 == 0:
+            if (k % 10) == 0:
                 log(f"→ {k}/{len(uniq_ids)} taksonów ukończono")
             time.sleep(SPECIES_SLEEP)
         except Exception as e:
@@ -464,6 +691,10 @@ def main():
             for c in cols: store[c].append("")
             id_bucket.append(tid)
 
+        if DEBUG:
+            DEBUG_ROWS.append(dbg)
+
+    # Złóż wynik
     result = pd.DataFrame({"TaxonId": id_bucket}) if id_bucket else pd.DataFrame(columns=["TaxonId"])
     for c in cols: result[c] = store.get(c, [])
     result.replace(["N/A", "0", 0, None], "", inplace=True)
@@ -472,43 +703,58 @@ def main():
     add_cols = [c for c in result.columns if c != "TaxonId" and c not in df.columns]
     full_enriched = df.merge(result[["TaxonId"] + add_cols] if add_cols else df[["TaxonId"]], on="TaxonId", how="left")
 
-    # Sortowanie po RedListCategory (priorytet: CR, EN, VU, NT, LC, …)
-    RL_ORDER = {"RE":0, "CR":1, "EN":2, "VU":3, "NT":4, "DD":5, "LC":6, "NA":7, "NE":8}
+    # Sortowanie po RL (RE→CR→EN→VU→NT→LC→DD→NA→NE)
+    RL_ORDER = {"RE":0, "CR":1, "EN":2, "VU":3, "NT":4, "LC":5, "DD":6, "NA":7, "NE":8}
 
     if paths["WANT_FULL"]:
         fe = full_enriched.copy()
-        fe["_rl_order"] = fe["RedListCategory"].astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
+        fe["_rl_order"] = fe.get("RedListCategory", "").astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
         fe = fe.sort_values(["_rl_order", "SwedishName", "ScientificName"], ascending=[True, True, True])
         fe.drop(columns=["_rl_order"], inplace=True)
         with pd.ExcelWriter(paths["OUT_FULL"], engine="openpyxl") as w:
             fe.to_excel(w, index=False)
         log(f"Zapisano: {paths['OUT_FULL']}")
 
-    # Overview: bez duplikatów po TaxonId
+    # Overview: dedupe po TaxonId
     overview = full_enriched[full_enriched["TaxonId"] > 0].drop_duplicates(subset=["TaxonId"], keep="first").copy()
-    overview["_rl_order"] = overview["RedListCategory"].astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
+    overview["_rl_order"] = overview.get("RedListCategory", "").astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
     overview = overview.sort_values(["_rl_order", "SwedishName", "ScientificName"], ascending=[True, True, True])
     overview.drop(columns=["_rl_order"], inplace=True)
+
+    # Wyczyść "Nej"/"False" w flagach (DODANO IAS_Union_EU do czyszczenia)
+    flag_cols = ["CITES","Bernkonventionen","Bonnkonventionen",
+                 "FågeldirektivetBilaga1","PrioriteradeFågelarterSkogsvårdslagen","Fridlyst",
+                 "DirectiveAppendix2","DirectiveAppendix2Priority","DirectiveAppendix4",
+                 "ProtectedByWorkProtectionConstitution","DirectiveAppendix5",
+                 "IAS_Union_EU"]
+    for c in flag_cols:
+        if c in overview.columns:
+            overview[c] = overview[c].astype(str).replace({"Nej":"", "nej":"", "False":"", "false":""})
 
     with pd.ExcelWriter(paths["OUT_WITH"], engine="openpyxl") as w:
         overview.to_excel(w, index=False)
     log(f"Zapisano: {paths['OUT_WITH']}")
 
-    # Tylko chronione
+    # bara_skyddade — bez IAS_Union_EU (nie wchodzi do filtra)
     protection_columns = [
         "ConservationStatus", "Artikel 17 - 2019", "TypicalSpecies", "CITES", "Bernkonventionen", "Bonnkonventionen",
         "PrioriteradeFågelarterSkogsvårdslagen", "FågeldirektivetBilaga1", "ProtectedByWorkProtectionConstitution",
         "ProtectedBirds", "DirectiveAppendix2", "DirectiveAppendix2Priority", "DirectiveAppendix4", "DirectiveAppendix5",
         "ForestrySignal", "ActionProgramStatus", "ActionProgramStart", "ActionProgramEnd", "ActionProgramName",
-        "Fridlyst", "Frid_text"
+        "Fridlyst",
     ]
 
     def has_protection(row) -> bool:
         empty_vals = {"N/A", "", 0, "0", "Nej", None}
-        return any(row.get(col) not in empty_vals for col in protection_columns)
+        for col in protection_columns:
+            if row.get(col) not in empty_vals:
+                return True
+        return False
 
     protected = overview[overview.apply(lambda r: has_protection(r), axis=1)].copy()
-    protected["_rl_order"] = protected["RedListCategory"].astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
+    protected.replace(["N/A", "0", 0, None], "", inplace=True)
+
+    protected["_rl_order"] = protected.get("RedListCategory", "").astype(str).str.upper().map(RL_ORDER).fillna(99).astype(int)
     protected = protected.sort_values(["_rl_order", "SwedishName", "ScientificName"], ascending=[True, True, True])
     protected.drop(columns=["_rl_order"], inplace=True)
 
@@ -516,8 +762,21 @@ def main():
         protected.to_excel(w, index=False)
     log(f"Zapisano: {paths['OUT_PROT']}")
 
-    # Opcjonalny MERGE: Riskklassning*.xlsx (IN → OUT_WITH)
-    optional_merge_risk_file(os.path.dirname(INPUT_FILE), paths["OUT_WITH"])
+    # DEBUG dump
+    if DEBUG:
+        try:
+            pd.DataFrame(DEBUG_ROWS).to_csv(paths["DBG_FILE"], index=False, encoding="utf-8-sig")
+            log(f"DEBUG zapisano: {paths['DBG_FILE']}")
+            # sumy „Ja”
+            def _sum_yes(df_, col):
+                return int((df_.get(col,"").astype(str).str.lower() == "ja").sum())
+            for col in flag_cols + ["Fridlyst"]:
+                log(f"SUMA '{col}=Ja': {_sum_yes(overview, col)}")
+        except Exception as e:
+            log(f"DEBUG zapis CSV nieudany: {e}")
+
+    # Opcjonalny MERGE risk-plik do WITH
+    optional_merge_risk_file(os.path.dirname(paths["INPUT_FILE"]), paths["OUT_WITH"])
 
     log("Proces zakończony sukcesem!")
 
