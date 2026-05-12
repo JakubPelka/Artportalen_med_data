@@ -25,10 +25,45 @@ import pandas as pd
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional, Set
 
+
 # ==== KLUCZE I ENDPOINTY ====
-TAXONOMY_KEY = os.getenv("TAXONOMY_KEY", "a2753962eba449bbbfdd253baf66fd26")
-SPECIES_KEY  = os.getenv("SPECIES_KEY",  "71c0e472ab954c37896ee2d91f042ff1")
-LISTS_KEY    = os.getenv("LISTS_KEY", os.getenv("SPECIESOBS_KEY", SPECIES_KEY))
+# Klucze API są czytane z lokalnego folderu /secrets w katalogu głównym repozytorium.
+# Folder /secrets musi być dodany do .gitignore i nie powinien trafiać do GitHub.
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+SECRETS_DIR = os.path.join(REPO_ROOT, "secrets")
+
+
+def load_secret(filename: str) -> str:
+    """
+    Wczytuje lokalny plik tekstowy z tokenem API.
+    Plik powinien zawierać tylko sam token, bez cudzysłowów i bez dodatkowego opisu.
+    """
+    path = os.path.join(SECRETS_DIR, filename)
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Brak pliku z kluczem API: {filename}\n"
+            f"Oczekiwana lokalizacja: {path}\n"
+            f"Utwórz folder 'secrets' w katalogu głównym repozytorium i dodaj tam plik {filename}."
+        )
+
+    with open(path, "r", encoding="utf-8") as f:
+        token = f.read().strip()
+
+    if not token:
+        raise ValueError(
+            f"Plik {filename} istnieje, ale jest pusty.\n"
+            f"Wpisz do niego sam token API."
+        )
+
+    return token
+
+
+TAXONOMY_KEY = load_secret("taxonomykey.txt")
+SPECIES_KEY = load_secret("specieskey.txt")
+LISTS_KEY = load_secret("listskey.txt")
 
 NAME_QUERY_SLEEP = 0.08
 SPECIES_SLEEP    = 0.08
