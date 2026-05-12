@@ -37,6 +37,8 @@ DATA_COLUMNS = [
     "Bonnkonventionen",
     "PrioriteradeFågelarterSkogsvårdslagen",
     "FågeldirektivetBilaga1",
+    "FågeldirektivetBilaga2",
+    "SkogsstyrelsensNaturvardsarter",
     "Fridlyst",
     "Frid_text",
     "ProtectedByWorkProtectionConstitution",
@@ -45,6 +47,7 @@ DATA_COLUMNS = [
     "DirectiveAppendix2Priority",
     "DirectiveAppendix4",
     "DirectiveAppendix5",
+    "Habitatdirektivet2023",
     "Artikel 17 - 2019",
     "Characteristic",
     "SpreadAndStatus",
@@ -65,7 +68,15 @@ DATA_COLUMNS = [
     "AlienSpeciesTaxonLists",
     "AlienSpeciesInvationPotentials",
     "AlienSpeciesRegions",
+    "FrammandeArter",
+    "FrammandeArterISverige",
     "IAS_Union_EU",
+    "RisklistaFrammandeArter",
+    "Risklista_SE",
+    "Risklista_HI",
+    "Risklista_PH",
+    "Risklista_LO",
+    "Risklista_NK",
 ]
 
 FLAG_COLUMNS = [
@@ -73,14 +84,25 @@ FLAG_COLUMNS = [
     "Bernkonventionen",
     "Bonnkonventionen",
     "FågeldirektivetBilaga1",
+    "FågeldirektivetBilaga2",
     "PrioriteradeFågelarterSkogsvårdslagen",
+    "SkogsstyrelsensNaturvardsarter",
     "Fridlyst",
     "DirectiveAppendix2",
     "DirectiveAppendix2Priority",
     "DirectiveAppendix4",
     "ProtectedByWorkProtectionConstitution",
     "DirectiveAppendix5",
+    "Habitatdirektivet2023",
+    "FrammandeArter",
+    "FrammandeArterISverige",
     "IAS_Union_EU",
+    "RisklistaFrammandeArter",
+    "Risklista_SE",
+    "Risklista_HI",
+    "Risklista_PH",
+    "Risklista_LO",
+    "Risklista_NK",
 ]
 
 PROTECTION_COLUMNS = [
@@ -92,12 +114,14 @@ PROTECTION_COLUMNS = [
     "Bonnkonventionen",
     "PrioriteradeFågelarterSkogsvårdslagen",
     "FågeldirektivetBilaga1",
+    "SkogsstyrelsensNaturvardsarter",
     "ProtectedByWorkProtectionConstitution",
     "ProtectedBirds",
     "DirectiveAppendix2",
     "DirectiveAppendix2Priority",
     "DirectiveAppendix4",
     "DirectiveAppendix5",
+    "Habitatdirektivet2023",
     "ForestrySignal",
     "ActionProgramStatus",
     "ActionProgramStart",
@@ -105,6 +129,25 @@ PROTECTION_COLUMNS = [
     "ActionProgramName",
     "Fridlyst",
 ]
+
+INVASIVE_COLUMNS = [
+    "FrammandeArter",
+    "FrammandeArterISverige",
+    "IAS_Union_EU",
+    "RisklistaFrammandeArter",
+    "Risklista_SE",
+    "Risklista_HI",
+    "Risklista_PH",
+    "Risklista_LO",
+    "Risklista_NK",
+    "AlienSpeciesRiskCategories",
+    "AlienSpeciesEnvironments",
+    "AlienSpeciesEcologyEffect",
+    "AlienSpeciesTaxonLists",
+    "AlienSpeciesInvationPotentials",
+    "AlienSpeciesRegions",
+]
+
 
 # Standard-rödlistning som ska ingå i _bara_skyddade / prioriterade arter.
 # "Od NT w górę" to RE, CR, EN, VU, NT. LC, NA, NE och DD filtreras bort
@@ -240,6 +283,17 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         fb_bonn = has_list_flag(lists, "Bonnkonventionen")
         fb_prio = has_list_flag(lists, "Prioriterade fågelarter i skogsvårdslagen")
         fb_fd1 = has_list_flag(lists, "Fågeldirektivet bilaga 1")
+        fb_fd2 = has_list_flag(lists, "Fågeldirektivet bilaga 2")
+        fb_skog_natur = has_list_flag(lists, "Skogsstyrelsens naturvårdsarter")
+        fb_frammande = has_list_flag(lists, "Främmande arter")
+        fb_frammande_sverige = has_list_flag(lists, "Främmande arter i Sverige")
+        fb_ias_eu = has_list_flag(lists, "EU-förordning 1143/2014") or has_list_flag(lists, "EU-förordning")
+        fb_risklista = has_list_flag(lists, "Risklista")
+        fb_risk_se = has_list_flag(lists, "Risklista - Mycket hög risk")
+        fb_risk_hi = has_list_flag(lists, "Risklista - Hög risk")
+        fb_risk_ph = has_list_flag(lists, "Risklista - Potentiellt hög risk")
+        fb_risk_lo = has_list_flag(lists, "Risklista - Låg risk")
+        fb_risk_nk = has_list_flag(lists, "Risklista - Ingen känd risk")
 
         record["CITES"] = tls_flags.get("CITES") or fb_cites
         record["Bernkonventionen"] = tls_flags.get("Bernkonventionen") or fb_bern
@@ -248,6 +302,8 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
             tls_flags.get("PrioriteradeFågelarterSkogsvårdslagen") or fb_prio
         )
         record["FågeldirektivetBilaga1"] = tls_flags.get("FågeldirektivetBilaga1") or fb_fd1
+        record["FågeldirektivetBilaga2"] = tls_flags.get("FågeldirektivetBilaga2") or fb_fd2
+        record["SkogsstyrelsensNaturvardsarter"] = tls_flags.get("SkogsstyrelsensNaturvardsarter") or fb_skog_natur
 
         prot_txt = (obj.get("protectedText") or "").strip()
         frid_flag = (
@@ -275,6 +331,7 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         record["DirectiveAppendix2Priority"] = tls_flags.get("DirectiveAppendix2Priority") or sd_hd2p
         record["DirectiveAppendix4"] = tls_flags.get("DirectiveAppendix4") or sd_hd4
         record["DirectiveAppendix5"] = tls_flags.get("DirectiveAppendix5") or sd_hd5
+        record["Habitatdirektivet2023"] = tls_flags.get("Habitatdirektivet2023", "")
         record["ProtectedByWorkProtectionConstitution"] = nc.get("protectedByWorkProtectionConstitution", "") or ""
         record["ProtectedBirds"] = nc.get("protectedBirds", "") or ""
 
@@ -326,7 +383,15 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         record["AlienSpeciesInvationPotentials"] = "; ".join(alien.get("invationPotentials", []) or [])
         record["AlienSpeciesRegions"] = "; ".join(alien.get("regions", []) or [])
 
-        record["IAS_Union_EU"] = tls_flags.get("IAS_Union_EU", "")
+        record["FrammandeArter"] = tls_flags.get("FrammandeArter") or fb_frammande
+        record["FrammandeArterISverige"] = tls_flags.get("FrammandeArterISverige") or fb_frammande_sverige
+        record["IAS_Union_EU"] = tls_flags.get("IAS_Union_EU") or fb_ias_eu
+        record["RisklistaFrammandeArter"] = tls_flags.get("RisklistaFrammandeArter") or fb_risklista
+        record["Risklista_SE"] = tls_flags.get("Risklista_SE") or fb_risk_se
+        record["Risklista_HI"] = tls_flags.get("Risklista_HI") or fb_risk_hi
+        record["Risklista_PH"] = tls_flags.get("Risklista_PH") or fb_risk_ph
+        record["Risklista_LO"] = tls_flags.get("Risklista_LO") or fb_risk_lo
+        record["Risklista_NK"] = tls_flags.get("Risklista_NK") or fb_risk_nk
 
         if is_debug():
             dbg.update({
@@ -336,13 +401,23 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
                 "TLS_Bern": record["Bernkonventionen"],
                 "TLS_Bonn": record["Bonnkonventionen"],
                 "TLS_FD1": record["FågeldirektivetBilaga1"],
+                "TLS_FD2": record["FågeldirektivetBilaga2"],
                 "TLS_Prio": record["PrioriteradeFågelarterSkogsvårdslagen"],
+                "TLS_SkogsstyrelsensNaturvardsarter": record["SkogsstyrelsensNaturvardsarter"],
                 "TLS_Fridlyst": record["Fridlyst"],
                 "TLS_HD2": record["DirectiveAppendix2"],
                 "TLS_HD2P": record["DirectiveAppendix2Priority"],
                 "TLS_HD4": record["DirectiveAppendix4"],
                 "TLS_HD5": record["DirectiveAppendix5"],
+                "TLS_Habitatdirektivet2023": record["Habitatdirektivet2023"],
+                "TLS_FrammandeArter": record["FrammandeArter"],
+                "TLS_FrammandeArterISverige": record["FrammandeArterISverige"],
                 "TLS_IAS_Union_EU": record["IAS_Union_EU"],
+                "TLS_Risklista_SE": record["Risklista_SE"],
+                "TLS_Risklista_HI": record["Risklista_HI"],
+                "TLS_Risklista_PH": record["Risklista_PH"],
+                "TLS_Risklista_LO": record["Risklista_LO"],
+                "TLS_Risklista_NK": record["Risklista_NK"],
             })
 
         if (index % 10) == 0:
@@ -448,6 +523,22 @@ def has_protection(row: pd.Series, preset: object | None = None) -> bool:
     if include_ias and has_ias_union_eu_flag(row):
         return True
     return False
+
+
+def has_invasive_or_alien_flag(row: pd.Series) -> bool:
+    """Returnerar True om raden har någon främmande/invasiv flagga eller RA-data."""
+    for col in INVASIVE_COLUMNS:
+        if col in row.index and not is_empty_value(row.get(col)):
+            return True
+    return False
+
+
+def make_alien_invasive(overview: pd.DataFrame) -> pd.DataFrame:
+    """Skapar separat tabell för främmande/invasiva arter."""
+    alien = overview[overview.apply(has_invasive_or_alien_flag, axis=1)].copy()
+    alien.replace(["N/A", "0", 0, None], "", inplace=True)
+    alien = sort_by_redlist(alien)
+    return alien
 
 
 def make_full_enriched(df: pd.DataFrame, result: pd.DataFrame) -> pd.DataFrame:

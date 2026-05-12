@@ -14,6 +14,7 @@ from .export_presets import EXTERNAL_PRESETS_DIR, apply_export_preset, get_prese
 from .processing import (
     FLAG_COLUMNS,
     build_enrichment_table,
+    make_alien_invasive,
     make_full_enriched,
     make_overview,
     make_protected,
@@ -156,6 +157,10 @@ def main() -> None:
     protected = make_protected(overview, preset)
     protected_export = apply_export_preset(protected, paths.get("EXPORT_PRESET"))
     write_excel(paths["OUT_PROT"], protected_export)
+
+    alien_invasive = make_alien_invasive(overview)
+    alien_export = apply_export_preset(alien_invasive, "frammande_invasiva")
+    write_excel(paths["OUT_ALIEN"], alien_export)
 
     if is_debug():
         try:

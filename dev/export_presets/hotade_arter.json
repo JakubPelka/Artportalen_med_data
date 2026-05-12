@@ -21,14 +21,29 @@
     "Fridlyst",
     "CITES",
     "FågeldirektivetBilaga1",
+    "FågeldirektivetBilaga2",
+    "SkogsstyrelsensNaturvardsarter",
     "DirectiveAppendix2",
     "DirectiveAppendix4",
-    "ActionProgramName"
+    "ActionProgramName",
+    "Habitatdirektivet2023",
+    "FrammandeArter",
+    "FrammandeArterISverige",
+    "RisklistaFrammandeArter",
+    "Risklista_SE",
+    "Risklista_HI",
+    "Risklista_PH",
+    "Risklista_LO",
+    "Risklista_NK"
   ],
   "filter": {
     "include_current_protection_filter": true,
     "include_redlist_filter": true,
-    "redlist_categories": ["CR", "EN", "VU"],
+    "redlist_categories": [
+      "CR",
+      "EN",
+      "VU"
+    ],
     "include_ias_union_eu_filter": false
   }
 }

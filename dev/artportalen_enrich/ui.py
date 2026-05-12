@@ -10,13 +10,18 @@ from tkinter import filedialog, messagebox, simpledialog
 from tkinter.scrolledtext import ScrolledText
 
 from .export_presets import (
+    CORE_INPUT_COLUMNS,
     EXTERNAL_PRESETS_DIR,
     get_default_preset_id,
+    get_known_export_columns,
     get_preset,
     list_presets,
     preset_summary_text,
+    save_custom_preset,
     save_preset_copy,
 )
+
+REDLIST_CHOICES = ("RE", "CR", "EN", "VU", "NT", "DD", "LC", "NA", "NE")
 
 
 def _center_window(window: tk.Toplevel) -> None:
@@ -71,8 +76,173 @@ def _show_preset_preview(root: tk.Tk, preset_id: str) -> None:
     root.wait_window(win)
 
 
+def _show_preset_editor(root: tk.Tk, preset_id: str) -> tuple[str | None, str | None]:
+    """Enkel editor för att skapa en ny JSON-preset från vald preset.
+
+    Editorn ändrar inte befintliga filer direkt. Den sparar alltid en ny JSON-preset
+    i dev/export_presets eller prod/export_presets beroende på var start.py körs.
+    """
+    base = get_preset(preset_id)
+    result: dict[str, str | None] = {"preset_id": None, "path": None}
+
+    win = tk.Toplevel(root)
+    win.title("Edytuj preset / skapa JSON-preset")
+    win.geometry("900x720")
+    win.minsize(760, 560)
+    win.grab_set()
+
+    outer = tk.Frame(win, padx=12, pady=10)
+    outer.pack(fill="both", expand=True)
+
+    info = tk.Label(
+        outer,
+        text=(
+            "Edytujesz kopię aktualnego presetu. Po zapisie powstanie nowy plik JSON w "
+            "dev/export_presets albo prod/export_presets. Kolejność kolumn jest stała, "
+            "zgodna z kolejnością techniczną skryptu."
+        ),
+        justify="left",
+        anchor="w",
+        wraplength=850,
+    )
+    info.pack(fill="x", pady=(0, 8))
+
+    meta_frame = tk.Frame(outer)
+    meta_frame.pack(fill="x", pady=(0, 8))
+
+    tk.Label(meta_frame, text="Nazwa presetu:", anchor="w").grid(row=0, column=0, sticky="w")
+    label_var = tk.StringVar(master=win, value=f"Kopia av {base.label}")
+    tk.Entry(meta_frame, textvariable=label_var, width=80).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+    meta_frame.columnconfigure(1, weight=1)
+
+    tk.Label(outer, text="Opis:", anchor="w").pack(fill="x")
+    desc = tk.Text(outer, height=4, wrap="word")
+    desc.pack(fill="x", pady=(0, 8))
+    desc.insert("1.0", base.description or "")
+
+    options = tk.Frame(outer, relief="groove", bd=1, padx=8, pady=8)
+    options.pack(fill="x", pady=(0, 8))
+
+    include_all_var = tk.BooleanVar(master=win, value=bool(base.include_all_columns))
+    include_original_var = tk.BooleanVar(master=win, value=bool(base.include_original_columns))
+    include_current_var = tk.BooleanVar(master=win, value=bool(base.include_current_protection_filter))
+    include_redlist_var = tk.BooleanVar(master=win, value=bool(base.include_redlist_filter))
+    include_ias_var = tk.BooleanVar(master=win, value=bool(base.include_ias_union_eu_filter))
+
+    tk.Checkbutton(options, text="Eksportuj wszystkie kolumny (ignoruje listę kolumn poniżej)", variable=include_all_var).grid(row=0, column=0, sticky="w", columnspan=3)
+    tk.Checkbutton(options, text="Zachowaj oryginalne kolumny z Artportalen", variable=include_original_var).grid(row=1, column=0, sticky="w", columnspan=3)
+    tk.Checkbutton(options, text="Filtr _bara_skyddade: obecne flagi ochronne/naturvårdsflaggor", variable=include_current_var).grid(row=2, column=0, sticky="w", columnspan=3)
+    tk.Checkbutton(options, text="Filtr _bara_skyddade: rödlistning", variable=include_redlist_var).grid(row=3, column=0, sticky="w")
+    tk.Checkbutton(options, text="Filtr _bara_skyddade: IAS_Union_EU", variable=include_ias_var).grid(row=4, column=0, sticky="w", columnspan=3)
+
+    red_frame = tk.Frame(options)
+    red_frame.grid(row=3, column=1, sticky="w", padx=(12, 0))
+    red_vars: dict[str, tk.BooleanVar] = {}
+    selected_red = {str(x).upper() for x in base.redlist_categories}
+    for i, cat in enumerate(REDLIST_CHOICES):
+        var = tk.BooleanVar(master=win, value=cat in selected_red)
+        red_vars[cat] = var
+        tk.Checkbutton(red_frame, text=cat, variable=var).grid(row=0, column=i, sticky="w")
+
+    columns_outer = tk.LabelFrame(outer, text="Kolumny w presecie", padx=8, pady=8)
+    columns_outer.pack(fill="both", expand=True)
+
+    column_buttons = tk.Frame(columns_outer)
+    column_buttons.pack(fill="x", pady=(0, 6))
+
+    canvas = tk.Canvas(columns_outer, highlightthickness=0)
+    scrollbar = tk.Scrollbar(columns_outer, orient="vertical", command=canvas.yview)
+    scroll_frame = tk.Frame(canvas)
+
+    scroll_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+    )
+    canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    known_columns = get_known_export_columns()
+    base_columns = set(base.enrichment_columns)
+    if base.include_all_columns:
+        base_columns = set(known_columns)
+
+    col_vars: dict[str, tk.BooleanVar] = {}
+    for idx, col in enumerate(known_columns):
+        var = tk.BooleanVar(master=win, value=col in base_columns)
+        col_vars[col] = var
+        r = idx // 2
+        c = idx % 2
+        tk.Checkbutton(scroll_frame, text=col, variable=var, anchor="w", justify="left").grid(row=r, column=c, sticky="w", padx=(0, 20), pady=1)
+
+    def select_all_columns() -> None:
+        for var in col_vars.values():
+            var.set(True)
+
+    def clear_columns() -> None:
+        for var in col_vars.values():
+            var.set(False)
+
+    def select_invasive_columns() -> None:
+        invasive_tokens = ("Frammande", "IAS_Union_EU", "Risklista", "AlienSpecies")
+        for col, var in col_vars.items():
+            if any(token in col for token in invasive_tokens) or col in {"TaxonId", "ScientificName", "SwedishName", "DisplayName", "Category"}:
+                var.set(True)
+
+    tk.Button(column_buttons, text="Välj alla kolumner", command=select_all_columns, width=18).pack(side="left")
+    tk.Button(column_buttons, text="Avmarkera alla", command=clear_columns, width=16).pack(side="left", padx=(8, 0))
+    tk.Button(column_buttons, text="Välj invasiva/främmande", command=select_invasive_columns, width=22).pack(side="left", padx=(8, 0))
+
+    buttons = tk.Frame(outer)
+    buttons.pack(fill="x", pady=(10, 0))
+
+    def save() -> None:
+        label = label_var.get().strip()
+        if not label:
+            messagebox.showerror("Brak nazwy", "Podaj nazwę presetu.", parent=win)
+            return
+
+        columns = [col for col, var in col_vars.items() if var.get()]
+        red_categories = [cat for cat, var in red_vars.items() if var.get()]
+        data = {
+            "label": label,
+            "description": desc.get("1.0", "end").strip(),
+            "include_all_columns": bool(include_all_var.get()),
+            "include_original_columns": bool(include_original_var.get()),
+            "original_column_candidates": list(CORE_INPUT_COLUMNS),
+            "enrichment_columns": columns,
+            "filter": {
+                "include_current_protection_filter": bool(include_current_var.get()),
+                "include_redlist_filter": bool(include_redlist_var.get()),
+                "redlist_categories": red_categories,
+                "include_ias_union_eu_filter": bool(include_ias_var.get()),
+            },
+        }
+        try:
+            new_id, path = save_custom_preset(data)
+            result["preset_id"] = new_id
+            result["path"] = path
+            messagebox.showinfo("Preset sparad", f"Preset zapisany jako JSON:\n\n{path}", parent=win)
+            win.destroy()
+        except Exception as e:
+            messagebox.showerror("Błąd zapisu presetu", str(e), parent=win)
+
+    def cancel() -> None:
+        win.destroy()
+
+    tk.Button(buttons, text="Zapisz jako nowy JSON", command=save, width=22).pack(side="right", padx=(8, 0))
+    tk.Button(buttons, text="Anuluj", command=cancel, width=12).pack(side="right")
+
+    _center_window(win)
+    _bring_to_front(win)
+    root.wait_window(win)
+    return result["preset_id"], result["path"]
+
+
 def _choose_export_preset(root: tk.Tk) -> str:
-    """Visar dialog för val, preview och sparande av exportprofil."""
+    """Visar dialog för val, preview, editor och sparande av exportprofil."""
     default_id = get_default_preset_id()
     selected = tk.StringVar(master=root, value=default_id)
     description_var = tk.StringVar(master=root, value=get_preset(default_id).description)
@@ -81,8 +251,8 @@ def _choose_export_preset(root: tk.Tk) -> str:
 
     dialog = tk.Toplevel(root)
     dialog.title("Välj exportprofil")
-    dialog.geometry("760x560")
-    dialog.minsize(680, 500)
+    dialog.geometry("760x600")
+    dialog.minsize(680, 520)
 
     # Viktigt: använd inte enbart transient(root) när root är withdraw(),
     # eftersom dialogen då kan hamna bakom andra fönster i Windows.
@@ -189,7 +359,19 @@ def _choose_export_preset(root: tk.Tk) -> str:
         except Exception as e:
             messagebox.showerror("Błąd zapisu presetu", str(e), parent=dialog)
 
+    def edit_preset() -> None:
+        new_id, path = _show_preset_editor(root, selected.get())
+        if new_id:
+            selected.set(new_id)
+            rebuild_preset_buttons()
+            messagebox.showinfo(
+                "Preset aktywny",
+                f"Nowy preset został zapisany i wybrany:\n\n{path}",
+                parent=dialog,
+            )
+
     tk.Button(tool_buttons, text="Podgląd presetu", command=preview, width=18).pack(side="left")
+    tk.Button(tool_buttons, text="Edytuj i zapisz JSON", command=edit_preset, width=22).pack(side="left", padx=(8, 0))
     tk.Button(tool_buttons, text="Zapisz kopię jako JSON", command=save_copy, width=24).pack(side="left", padx=(8, 0))
 
     buttons = tk.Frame(outer)
@@ -265,6 +447,7 @@ def pick_inputs() -> Dict[str, Any]:
         "OUT_FULL": os.path.join(outdir, f"{base}_full_.xlsx"),
         "OUT_WITH": os.path.join(outdir, f"{base}_with_data.xlsx"),
         "OUT_PROT": os.path.join(outdir, f"{base}_bara_skyddade.xlsx"),
+        "OUT_ALIEN": os.path.join(outdir, f"{base}_frammande_invasiva.xlsx"),
         "LOG_FILE": os.path.join(outdir, f"{base}_log.txt"),
         "DBG_FILE": os.path.join(outdir, "tls_debug.csv"),
         "WANT_FULL": want_full,

@@ -108,13 +108,16 @@ PROTECTION_SUMMARY_COLUMNS = (
     "Bernkonventionen",
     "Bonnkonventionen",
     "FågeldirektivetBilaga1",
+    "FågeldirektivetBilaga2",
     "PrioriteradeFågelarterSkogsvårdslagen",
+    "SkogsstyrelsensNaturvardsarter",
     "ProtectedByWorkProtectionConstitution",
     "ProtectedBirds",
     "DirectiveAppendix2",
     "DirectiveAppendix2Priority",
     "DirectiveAppendix4",
     "DirectiveAppendix5",
+    "Habitatdirektivet2023",
     "Artikel 17 - 2019",
     "TypicalSpecies",
     "ForestrySignal",
@@ -151,7 +154,15 @@ ALIEN_SPECIES_COLUMNS = (
     "AlienSpeciesTaxonLists",
     "AlienSpeciesInvationPotentials",
     "AlienSpeciesRegions",
+    "FrammandeArter",
+    "FrammandeArterISverige",
     "IAS_Union_EU",
+    "RisklistaFrammandeArter",
+    "Risklista_SE",
+    "Risklista_HI",
+    "Risklista_PH",
+    "Risklista_LO",
+    "Risklista_NK",
 )
 
 BUILTIN_PRESETS = {
@@ -215,6 +226,28 @@ BUILTIN_PRESETS = {
             *IDENTIFICATION_COLUMNS,
             *REDLIST_COLUMNS,
             *ALIEN_SPECIES_COLUMNS,
+        ),
+        include_current_protection_filter=False,
+        include_redlist_filter=False,
+        redlist_categories=(),
+        include_ias_union_eu_filter=True,
+    ),
+    "frammande_invasiva": ExportPreset(
+        preset_id="frammande_invasiva",
+        label="Främmande / invasiva arter",
+        description=(
+            "Exportprofil för separat produkt _frammande_invasiva: främmande arter, "
+            "EU-förordning 1143/2014 och Risklista SE/HI/PH/LO/NK."
+        ),
+        include_original_columns=True,
+        enrichment_columns=(
+            *IDENTIFICATION_COLUMNS,
+            *REDLIST_COLUMNS,
+            *ALIEN_SPECIES_COLUMNS,
+            "SpreadAndStatus",
+            "Ecology",
+            "Threat",
+            "ConservationMeasures",
         ),
         include_current_protection_filter=False,
         include_redlist_filter=False,
@@ -379,6 +412,50 @@ def apply_export_preset(df: pd.DataFrame, preset_id: str | None) -> pd.DataFrame
         return df.copy()
 
     return df.loc[:, selected].copy()
+
+
+def get_known_export_columns() -> list[str]:
+    """Kolumner som kan väljas i preset-editorn. Ordningen är stabil och praktisk."""
+    columns: list[str] = []
+    for group in (
+        CORE_INPUT_COLUMNS,
+        IDENTIFICATION_COLUMNS,
+        REDLIST_COLUMNS,
+        PROTECTION_SUMMARY_COLUMNS,
+        NATURE_TEXT_COLUMNS,
+        ALIEN_SPECIES_COLUMNS,
+    ):
+        for col in group:
+            if col not in columns:
+                columns.append(col)
+    return columns
+
+
+def save_custom_preset(data: dict[str, Any]) -> tuple[str, str]:
+    """Sparar en användarskapad preset som JSON i <dev/prod>/export_presets/."""
+    label = str(data.get("label") or data.get("name") or "Egen preset").strip()
+    preset_id = str(data.get("preset_id") or data.get("id") or _slugify(label)).strip()
+    if not preset_id:
+        preset_id = _slugify(label)
+
+    os.makedirs(EXTERNAL_PRESETS_DIR, exist_ok=True)
+
+    existing = load_presets()
+    base_id = preset_id
+    if preset_id in existing:
+        suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        preset_id = f"{base_id}_{suffix}"
+
+    data = dict(data)
+    data["preset_id"] = preset_id
+    data["label"] = label
+
+    path = os.path.join(EXTERNAL_PRESETS_DIR, f"{preset_id}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+    return preset_id, path
 
 
 def _slugify(text: str) -> str:

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """TaxonListService: definitioner, medlemskap och skyddsflaggor."""
 
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, Iterable, List, Set
 
 import requests
 
@@ -19,6 +19,48 @@ def _norm(s: str) -> str:
     return normkey(s).replace("å", "a").replace("ä", "a").replace("ö", "o")
 
 
+def _ids_by_known_ids(known_ids: Iterable[int]) -> Set[int]:
+    """Returnerar kända TLS-id:n som faktiskt finns i /definitions."""
+    return {int(i) for i in known_ids if int(i) in _TLS_DEFS}
+
+
+def _ids_by_contains_any(substrs: List[str]) -> Set[int]:
+    out: Set[int] = set()
+    normalized_substrs = [_norm(sub) for sub in substrs]
+    for lid, name in _TLS_DEFS.items():
+        n = _norm(name)
+        if any(sub in n for sub in normalized_substrs):
+            out.add(lid)
+    return out
+
+
+def _ids_by_required_groups(
+    required_groups: List[List[str]],
+    *,
+    exclude: List[str] | None = None,
+    known_ids: Iterable[int] = (),
+) -> Set[int]:
+    """Hitta list-id:n där varje termgrupp matchas minst en gång.
+
+    Exempel:
+        required_groups=[['habitatdirektiv'], ['bilaga 2', 'annex 2']]
+
+    Detta är striktare än tidigare lösning med bara 'bilaga 2', som riskerade
+    att blanda ihop Habitatdirektivets bilaga 2 med Fågeldirektivets bilaga 2.
+    """
+    out: Set[int] = _ids_by_known_ids(known_ids)
+    required = [[_norm(t) for t in group] for group in required_groups]
+    excluded = [_norm(t) for t in (exclude or [])]
+
+    for lid, name in _TLS_DEFS.items():
+        n = _norm(name)
+        if excluded and any(term in n for term in excluded):
+            continue
+        if all(any(term in n for term in group) for group in required):
+            out.add(lid)
+    return out
+
+
 def fetch_tls_definitions() -> None:
     """Mapa ID→nazwa + zbiory ID interesujących list."""
     global _TLS_DEFS, _TLS_CATSETS, _TLS_DEFS_READY
@@ -33,76 +75,102 @@ def fetch_tls_definitions() -> None:
 
         defs = json_safe(r) or {}
         lists = defs.get("conservationLists", []) or []
-
         for it in lists:
             lid = it.get("id")
             name = it.get("name") or ""
             if isinstance(lid, int) and name:
                 _TLS_DEFS[lid] = name
 
-        def find_ids_by_contains(substrs: List[str]) -> Set[int]:
-            out: Set[int] = set()
-            normalized_substrs = [_norm(sub) for sub in substrs]
-
-            for lid, name in _TLS_DEFS.items():
-                n = _norm(name)
-                if any(sub in n for sub in normalized_substrs):
-                    out.add(lid)
-
-            return out
-
         _TLS_CATSETS = {
-            "CITES": find_ids_by_contains(["cites"]),
-            "Bernkonventionen": find_ids_by_contains(["bern"]),
-            "Bonnkonventionen": find_ids_by_contains(["bonn", "cms"]),
-            "FågeldirektivetBilaga1": find_ids_by_contains([
-                "fageldirektivet bilaga 1",
-                "fågeldirektivet bilaga 1",
-            ]),
-            "PrioriteradeFågelarterSkogsvårdslagen": find_ids_by_contains([
+            "CITES": _ids_by_contains_any(["cites"]),
+            "Bernkonventionen": _ids_by_contains_any(["bern"]),
+            "Bonnkonventionen": _ids_by_contains_any(["bonn", "cms"]),
+            "FågeldirektivetBilaga1": _ids_by_required_groups(
+                [["fageldirektivet", "fågeldirektivet", "birds directive"], ["bilaga 1", "annex 1"]],
+                known_ids=(46,),
+            ),
+            "FågeldirektivetBilaga2": _ids_by_required_groups(
+                [["fageldirektivet", "fågeldirektivet", "birds directive"], ["bilaga 2", "annex 2"]],
+                known_ids=(47,),
+            ),
+            "PrioriteradeFågelarterSkogsvårdslagen": _ids_by_required_groups(
+                [["prioriterade", "priority"], ["fagel", "fågel", "birds"]],
+                known_ids=(45,),
+            ) | _ids_by_contains_any([
                 "prioriterade fagelarter i skogsvardslagen",
                 "prioriterade fågelarter i skogsvårdslagen",
                 "skogsvardslagen",
                 "skogsvårdslagen",
             ]),
-            "Fridlyst": find_ids_by_contains([
-                "fridlysta arter",
-                "fridlysta faglar",
-                "fridlysta fåglar",
-                "fridlysta",
-            ]),
-            "Habitat_Bilaga2": find_ids_by_contains([
-                "habitatdirektivets bilaga 2",
-                "habitatdirektivet bilaga 2",
-                "bilaga 2",
-            ]),
-            "Habitat_Bilaga2_Prio": find_ids_by_contains([
-                "habitatdirektivets bilaga 2",
-                "habitatdirektivet bilaga 2",
-                "prioriterad",
-                "prioriterade",
-                "priority",
-            ]),
-            "Habitat_Bilaga4": find_ids_by_contains([
-                "habitatdirektivets bilaga 4",
-                "habitatdirektivet bilaga 4",
-                "bilaga 4",
-            ]),
-            "Habitat_Bilaga5": find_ids_by_contains([
-                "habitatdirektivets bilaga 5",
-                "habitatdirektivet bilaga 5",
-                "bilaga 5",
-            ]),
-            "IAS_Union_EU": find_ids_by_contains([
-                "invasiv",
-                "invasiva",
-                "frammande",
-                "eu-forteckning",
-                "eu forteckning",
-                "unionsforteckning",
-                "union list",
-                "eu list",
-            ]),
+            "Fridlyst": _ids_by_required_groups(
+                [["fridlysta", "protected by law"]],
+                known_ids=(34,),
+            ),
+            "Habitat_Bilaga2": _ids_by_required_groups(
+                [["habitatdirektiv", "habitats directive"], ["bilaga 2", "annex 2"]],
+                exclude=["fageldirektiv", "fågeldirektiv", "birds directive", "prioriterad", "priority"],
+                known_ids=(9,),
+            ),
+            "Habitat_Bilaga2_Prio": _ids_by_required_groups(
+                [["habitatdirektiv", "habitats directive"], ["bilaga 2", "annex 2"], ["prioriterad", "priority"]],
+                exclude=["fageldirektiv", "fågeldirektiv", "birds directive"],
+                known_ids=(10,),
+            ),
+            "Habitat_Bilaga4": _ids_by_required_groups(
+                [["habitatdirektiv", "habitats directive"], ["bilaga 4", "annex 4"]],
+                exclude=["fageldirektiv", "fågeldirektiv", "birds directive"],
+                known_ids=(11,),
+            ),
+            "Habitat_Bilaga5": _ids_by_required_groups(
+                [["habitatdirektiv", "habitats directive"], ["bilaga 5", "annex 5"]],
+                exclude=["fageldirektiv", "fågeldirektiv", "birds directive"],
+                known_ids=(12,),
+            ),
+            "Habitatdirektivet2023": _ids_by_required_groups(
+                [["habitatdirektiv", "habitats directive"], ["2023"]],
+                known_ids=(265,),
+            ),
+            "SkogsstyrelsensNaturvardsarter": _ids_by_required_groups(
+                [["skogsstyrelsens", "swedish forest agency"], ["naturvardsarter", "naturvårdsarter", "nature conservation species"]],
+                known_ids=(235,),
+            ),
+            "FrammandeArter": _ids_by_required_groups(
+                [["frammande arter", "främmande arter", "alien species", "invasive species"]],
+                known_ids=(35,),
+            ),
+            "FrammandeArterISverige": _ids_by_required_groups(
+                [["frammande arter i sverige", "främmande arter i sverige", "invasive species in sweden", "alien species in sweden"]],
+                known_ids=(36,),
+            ),
+            "IAS_Union_EU": _ids_by_required_groups(
+                [["eu-forordning", "eu-förordning", "eu regulation", "1143", "unionsforteckning", "unionsförteckning", "union list"]],
+                known_ids=(37,),
+            ),
+            "RisklistaFrammandeArter": _ids_by_required_groups(
+                [["risklista", "risk assessment"]],
+                known_ids=(38,),
+            ),
+            "Risklista_SE": _ids_by_required_groups(
+                [["risklista", "risk assessment"], ["mycket hog risk", "mycket hög risk", "severe"]],
+                known_ids=(39,),
+            ),
+            "Risklista_HI": _ids_by_required_groups(
+                [["risklista", "risk assessment"], ["hog risk", "hög risk", "high"]],
+                exclude=["potentiellt", "potentially", "mycket", "severe"],
+                known_ids=(40,),
+            ),
+            "Risklista_PH": _ids_by_required_groups(
+                [["risklista", "risk assessment"], ["potentiellt hog risk", "potentiellt hög risk", "potentially high"]],
+                known_ids=(41,),
+            ),
+            "Risklista_LO": _ids_by_required_groups(
+                [["risklista", "risk assessment"], ["lag risk", "låg risk", "low"]],
+                known_ids=(42,),
+            ),
+            "Risklista_NK": _ids_by_required_groups(
+                [["risklista", "risk assessment"], ["ingen kand risk", "ingen känd risk", "no known"]],
+                known_ids=(43,),
+            ),
         }
 
         _TLS_DEFS_READY = True
@@ -110,7 +178,7 @@ def fetch_tls_definitions() -> None:
         if is_debug():
             for cat, ids in _TLS_CATSETS.items():
                 sample = ", ".join(
-                    [f"{i}:{_TLS_DEFS.get(i, '?')[:24]}" for i in list(sorted(ids))[:6]]
+                    [f"{i}:{_TLS_DEFS.get(i, '?')[:40]}" for i in list(sorted(ids))[:8]]
                 )
                 log(f" → {cat}: {len(ids)} id ({sample})")
 
@@ -129,7 +197,6 @@ def tls_fetch_members_for_list_ids(list_ids: Set[int]) -> Set[int]:
             "outputFields": ["id"],
         }
         r = requests.post(TLS_TAXA_URL, headers=HEADERS_LISTS, json=payload, timeout=TIMEOUT)
-
         if r.status_code != 200 or not r.content:
             log(f"TLS /taxa {r.status_code} — {r.text[:200]!r}")
             return set()
@@ -166,8 +233,8 @@ def tls_fetch_members_for_list_ids(list_ids: Set[int]) -> Set[int]:
 def tls_build_memberships() -> None:
     """Buduje _TLS_MEMBERS: nazwa-kategorii → zbiór TaxonId."""
     global _TLS_MEMBERS
-
     _TLS_MEMBERS = {}
+
     for cat, ids in _TLS_CATSETS.items():
         mem = tls_fetch_members_for_list_ids(ids)
         _TLS_MEMBERS[cat] = mem
@@ -191,11 +258,22 @@ def tls_flags_by_membership(tid: int) -> Dict[str, str]:
         "Bernkonventionen": hit("Bernkonventionen"),
         "Bonnkonventionen": hit("Bonnkonventionen"),
         "FågeldirektivetBilaga1": hit("FågeldirektivetBilaga1"),
+        "FågeldirektivetBilaga2": hit("FågeldirektivetBilaga2"),
         "PrioriteradeFågelarterSkogsvårdslagen": hit("PrioriteradeFågelarterSkogsvårdslagen"),
         "Fridlyst": hit("Fridlyst"),
         "DirectiveAppendix2": hit("Habitat_Bilaga2"),
         "DirectiveAppendix2Priority": hit("Habitat_Bilaga2_Prio"),
         "DirectiveAppendix4": hit("Habitat_Bilaga4"),
         "DirectiveAppendix5": hit("Habitat_Bilaga5"),
+        "Habitatdirektivet2023": hit("Habitatdirektivet2023"),
+        "SkogsstyrelsensNaturvardsarter": hit("SkogsstyrelsensNaturvardsarter"),
+        "FrammandeArter": hit("FrammandeArter"),
+        "FrammandeArterISverige": hit("FrammandeArterISverige"),
         "IAS_Union_EU": hit("IAS_Union_EU"),
+        "RisklistaFrammandeArter": hit("RisklistaFrammandeArter"),
+        "Risklista_SE": hit("Risklista_SE"),
+        "Risklista_HI": hit("Risklista_HI"),
+        "Risklista_PH": hit("Risklista_PH"),
+        "Risklista_LO": hit("Risklista_LO"),
+        "Risklista_NK": hit("Risklista_NK"),
     }

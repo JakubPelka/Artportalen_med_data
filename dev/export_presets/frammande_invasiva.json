@@ -1,10 +1,18 @@
 {
-  "preset_id": "ias_union_eu",
-  "label": "IAS Union EU",
-  "description": "Profil för främmande/invasiva arter. _bara_skyddade filtreras här på IAS_Union_EU, inte på skyddsflaggor eller rödlistning.",
+  "preset_id": "frammande_invasiva_json",
+  "label": "Främmande / invasiva arter [JSON]",
+  "description": "Preset för främmande arter, EU-förordning 1143/2014 och Risklista SE/HI/PH/LO/NK. Passar särskilt för _frammande_invasiva.xlsx.",
   "include_all_columns": false,
   "include_original_columns": true,
-  "original_column_candidates": [],
+  "original_column_candidates": [
+    "TaxonId",
+    "taxon_svensktNamn",
+    "taxon_vetenskapligtNamn",
+    "Kommun",
+    "Lokalnamn",
+    "Startdatum",
+    "Slutdatum"
+  ],
   "enrichment_columns": [
     "TaxonId",
     "ScientificName",
@@ -12,9 +20,10 @@
     "DisplayName",
     "Category",
     "RedListCategory",
-    "IAS_Union_EU",
+    "RedListCriterion",
     "FrammandeArter",
     "FrammandeArterISverige",
+    "IAS_Union_EU",
     "RisklistaFrammandeArter",
     "Risklista_SE",
     "Risklista_HI",
@@ -26,7 +35,11 @@
     "AlienSpeciesEcologyEffect",
     "AlienSpeciesTaxonLists",
     "AlienSpeciesInvationPotentials",
-    "AlienSpeciesRegions"
+    "AlienSpeciesRegions",
+    "SpreadAndStatus",
+    "Ecology",
+    "Threat",
+    "ConservationMeasures"
   ],
   "filter": {
     "include_current_protection_filter": false,
