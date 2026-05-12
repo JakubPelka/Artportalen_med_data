@@ -10,6 +10,7 @@ import pandas as pd
 from .config import NAME_QUERY_SLEEP
 from .excel_io import find_column, read_artportalen_excel
 from .logger_utils import configure_logging, get_debug_rows, is_debug, log
+from .export_presets import apply_export_preset, get_preset
 from .processing import (
     FLAG_COLUMNS,
     build_enrichment_table,
@@ -118,6 +119,9 @@ def main() -> None:
 
     log(f"Plik wejściowy: {paths['INPUT_FILE']}")
     log(f"Folder wyjściowy: {paths['OUTDIR']}")
+    preset = get_preset(paths.get("EXPORT_PRESET"))
+    log(f"Exportprofil: {preset.label}")
+    log("Filtr _bara_skyddade: obecne flagi ochronne + RedListCategory RE/CR/EN/VU/NT.")
 
     df = read_artportalen_excel(paths["INPUT_FILE"])
     col_taxonid, col_sv, col_sci = _detect_input_columns(df)
@@ -139,10 +143,12 @@ def main() -> None:
         write_excel(paths["OUT_FULL"], full_sorted)
 
     overview = make_overview(full_enriched)
-    write_excel(paths["OUT_WITH"], overview)
+    overview_export = apply_export_preset(overview, paths.get("EXPORT_PRESET"))
+    write_excel(paths["OUT_WITH"], overview_export)
 
     protected = make_protected(overview)
-    write_excel(paths["OUT_PROT"], protected)
+    protected_export = apply_export_preset(protected, paths.get("EXPORT_PRESET"))
+    write_excel(paths["OUT_PROT"], protected_export)
 
     if is_debug():
         try:

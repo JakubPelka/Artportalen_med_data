@@ -106,6 +106,11 @@ PROTECTION_COLUMNS = [
     "Fridlyst",
 ]
 
+# Rödlistning som ska ingå i _bara_skyddade / prioriterade arter.
+# "Od NT w górę" to RE, CR, EN, VU, NT. LC, NA, NE och DD filtreras bort
+# om de inte samtidigt har annan skydds-/naturvårdsflagga.
+REDLIST_PROTECTION_CATEGORIES = {"RE", "CR", "EN", "VU", "NT"}
+
 
 def has_list_flag(lists: Any, list_name: str) -> str:
     ln = (list_name or "").strip().lower()
@@ -397,7 +402,20 @@ def clean_flag_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def has_redlist_protection(row: pd.Series) -> bool:
+    """Returnerar True om RedListCategory är RE/CR/EN/VU/NT."""
+    if "RedListCategory" not in row.index:
+        return False
+    category = str(row.get("RedListCategory") or "").strip().upper()
+    return category in REDLIST_PROTECTION_CATEGORIES
+
+
 def has_protection(row: pd.Series) -> bool:
+    # Ny logik: rödlistning från NT och uppåt ska ingå i _bara_skyddade.
+    # LC filtreras bort här, om arten inte samtidigt har annan skyddsflagga.
+    if has_redlist_protection(row):
+        return True
+
     for col in PROTECTION_COLUMNS:
         if col in row.index and not is_empty_value(row.get(col)):
             return True
