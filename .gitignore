@@ -1,1 +1,3 @@
 /secrets
+/dev/artportalen_enrich/__pycache__
+/prod/artportalen_enrich/__pycache__
