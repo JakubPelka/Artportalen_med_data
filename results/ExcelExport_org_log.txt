@@ -1,0 +1,56 @@
+[2026-05-12 11:03:15] Plik wejściowy: C:/Users/jakpel/OneDrive - Kungsbacka kommun/GitHub/Artportalen_med_data/dev/test_data/ExcelExport_org.xlsx
+[2026-05-12 11:03:15] Folder wyjściowy: C:/Users/jakpel/OneDrive - Kungsbacka kommun/GitHub/Artportalen_med_data/results
+[2026-05-12 11:03:15] Exportprofil: Alla kolumner — nuvarande/maximal export
+[2026-05-12 11:03:15] Filtr _bara_skyddade: obecne flagi ochronne + RedListCategory RE/CR/EN/VU/NT.
+[2026-05-12 11:03:16] Wykryto dodatkowe wiersze przed nagłówkiem: 2. Czytam dane od wiersza 3.
+[2026-05-12 11:03:19] Wykryto kolumnę TaxonId — pomijam dopasowanie po nazwach.
+[2026-05-12 11:03:19] Do API wysyłam 1340 unikalnych TaxonId>0 z 9031 wierszy wejściowych.
+[2026-05-12 11:03:19] Pominięto 7691 powtórzonych TaxonId przy zapytaniach API; pełna tabela nadal zachowa wszystkie obserwacje.
+[2026-05-12 11:03:20]  → CITES: 5 id (21:CITES, 22:CITES bilaga A, 23:CITES bilaga B, 24:CITES bilaga C, 25:CITES bilaga D)
+[2026-05-12 11:03:20]  → Bernkonventionen: 4 id (26:Bernkonventionen, 27:Bernkonventionens bilaga, 28:Bernkonventionens bilaga, 29:Bernkonventionens bilaga)
+[2026-05-12 11:03:20]  → Bonnkonventionen: 3 id (30:Bonnkonventionen, 31:Bonnkonventionen bilaga , 32:Bonnkonventionen bilaga )
+[2026-05-12 11:03:20]  → FågeldirektivetBilaga1: 1 id (46:Fågeldirektivet bilaga 1)
+[2026-05-12 11:03:20]  → PrioriteradeFågelarterSkogsvårdslagen: 1 id (45:Prioriterade fågelarter )
+[2026-05-12 11:03:20]  → Fridlyst: 2 id (34:Fridlysta arter, 281:Fridlysta fåglar)
+[2026-05-12 11:03:20]  → Habitat_Bilaga2: 3 id (9:Habitatdirektivets bilag, 10:Habitatdirektivets bilag, 47:Fågeldirektivet bilaga 2)
+[2026-05-12 11:03:20]  → Habitat_Bilaga2_Prio: 3 id (9:Habitatdirektivets bilag, 10:Habitatdirektivets bilag, 45:Prioriterade fågelarter )
+[2026-05-12 11:03:20]  → Habitat_Bilaga4: 1 id (11:Habitatdirektivets bilag)
+[2026-05-12 11:03:20]  → Habitat_Bilaga5: 1 id (12:Habitatdirektivets bilag)
+[2026-05-12 11:03:20]  → IAS_Union_EU: 3 id (35:Främmande arter, 36:Främmande i Sverige, 236:invasivaarter.nu)
+[2026-05-12 11:03:20]  ↳ członków: 139 (przykład: 9, 49, 233, 289, 290, 475, 504, 514, 619, 620, 742, 743)
+[2026-05-12 11:03:20] TLS /taxa: CITES — 139 taxa
+[2026-05-12 11:03:20]  ↳ członków: 448 (przykład: 30, 166, 167, 168, 210, 293, 496, 504, 530, 540, 564, 756)
+[2026-05-12 11:03:20] TLS /taxa: Bernkonventionen — 448 taxa
+[2026-05-12 11:03:20]  ↳ członków: 204 (przykład: 100001, 100002, 100003, 100006, 100007, 100008, 100009, 100011, 100014, 100015, 100018, 100019)
+[2026-05-12 11:03:20] TLS /taxa: Bonnkonventionen — 204 taxa
+[2026-05-12 11:03:21]  ↳ członków: 73 (przykład: 100004, 100008, 100010, 100011, 100018, 100019, 100020, 100023, 100027, 100030, 100031, 100032)
+[2026-05-12 11:03:21] TLS /taxa: FågeldirektivetBilaga1 — 73 taxa
+[2026-05-12 11:03:21]  ↳ członków: 57 (przykład: 100006, 100009, 100011, 100020, 100034, 100038, 100045, 100046, 100048, 100049, 100050, 100054)
+[2026-05-12 11:03:21] TLS /taxa: PrioriteradeFågelarterSkogsvårdslagen — 57 taxa
+[2026-05-12 11:03:21]  ↳ członków: 926 (przykład: 9, 17, 30, 31, 32, 49, 60, 61, 79, 81, 83, 84)
+[2026-05-12 11:03:21] TLS /taxa: Fridlyst — 926 taxa
+[2026-05-12 11:03:21]  ↳ członków: 276 (przykład: 30, 83, 84, 90, 91, 111, 118, 168, 172, 180, 210, 233)
+[2026-05-12 11:03:21] TLS /taxa: Habitat_Bilaga2 — 276 taxa
+[2026-05-12 11:03:21]  ↳ członków: 192 (przykład: 30, 83, 84, 90, 91, 111, 118, 168, 172, 180, 210, 233)
+[2026-05-12 11:03:21] TLS /taxa: Habitat_Bilaga2_Prio — 192 taxa
+[2026-05-12 11:03:21]  ↳ członków: 162 (przykład: 30, 83, 84, 90, 91, 111, 118, 168, 172, 233, 261, 345)
+[2026-05-12 11:03:21] TLS /taxa: Habitat_Bilaga4 — 162 taxa
+[2026-05-12 11:03:22]  ↳ członków: 125 (przykład: 552, 1512, 1513, 1895, 2180, 2653, 2654, 2655, 2861, 2862, 2863, 2864)
+[2026-05-12 11:03:22] TLS /taxa: Habitat_Bilaga5 — 125 taxa
+[2026-05-12 11:03:22]  ↳ członków: 5335 (przykład: 63, 92, 209, 267, 285, 315, 316, 350, 481, 623, 644, 645)
+[2026-05-12 11:03:22] TLS /taxa: IAS_Union_EU — 5335 taxa
+[2026-05-12 11:03:22] — 1/1340 — TaxonId=18
+[2026-05-12 11:03:22] — 2/1340 — TaxonId=108
+[2026-05-12 11:03:23] — 3/1340 — TaxonId=144
+[2026-05-12 11:03:23] — 4/1340 — TaxonId=145
+[2026-05-12 11:03:23] — 5/1340 — TaxonId=230
+[2026-05-12 11:03:24] — 6/1340 — TaxonId=365
+[2026-05-12 11:03:25] — 7/1340 — TaxonId=535
+[2026-05-12 11:03:25] — 8/1340 — TaxonId=536
+[2026-05-12 11:03:25] — 9/1340 — TaxonId=648
+[2026-05-12 11:03:25] — 10/1340 — TaxonId=690
+[2026-05-12 11:03:25] → 10/1340 taksonów ukończono
+[2026-05-12 11:03:26] — 11/1340 — TaxonId=692
+[2026-05-12 11:03:26] — 12/1340 — TaxonId=734
+[2026-05-12 11:03:26] — 13/1340 — TaxonId=782
+[2026-05-12 11:03:26] — 14/1340 — TaxonId=924

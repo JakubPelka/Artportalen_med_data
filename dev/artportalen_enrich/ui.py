@@ -11,17 +11,46 @@ from tkinter import filedialog, messagebox
 from .export_presets import get_default_preset_id, get_preset, list_presets
 
 
+def _center_window(window: tk.Toplevel) -> None:
+    """Placera ett Tkinter-fönster ungefär centralt på skärmen."""
+    window.update_idletasks()
+    width = window.winfo_width()
+    height = window.winfo_height()
+    x = (window.winfo_screenwidth() // 2) - (width // 2)
+    y = (window.winfo_screenheight() // 2) - (height // 2)
+    window.geometry(f"+{x}+{y}")
+
+
+def _bring_to_front(window: tk.Toplevel) -> None:
+    """
+    Försök visa dialogen ovanpå andra fönster.
+
+    Detta är viktigt på Windows, där en Toplevel-dialog som skapas från ett
+    dolt root-fönster ibland hamnar bakom terminalen. Då ser programmet ut att
+    ha hängt sig, trots att det bara väntar på dialogen.
+    """
+    try:
+        window.lift()
+        window.attributes("-topmost", True)
+        window.after(500, lambda: window.attributes("-topmost", False))
+        window.focus_force()
+    except Exception:
+        pass
+
+
 def _choose_export_preset(root: tk.Tk) -> str:
     """Visar enkel dialog för val av exportprofil."""
     presets = list_presets()
     default_id = get_default_preset_id()
-    selected = tk.StringVar(value=default_id)
+    selected = tk.StringVar(master=root, value=default_id)
     result = {"preset_id": default_id}
 
     dialog = tk.Toplevel(root)
     dialog.title("Välj exportprofil")
     dialog.resizable(False, False)
-    dialog.transient(root)
+
+    # Viktigt: använd inte enbart transient(root) när root är withdraw(),
+    # eftersom dialogen då kan hamna bakom andra fönster i Windows.
     dialog.grab_set()
 
     frame = tk.Frame(dialog, padx=14, pady=12)
@@ -36,7 +65,7 @@ def _choose_export_preset(root: tk.Tk) -> str:
     )
     title.pack(fill="x", pady=(0, 10))
 
-    description_var = tk.StringVar(value=get_preset(default_id).description)
+    description_var = tk.StringVar(master=root, value=get_preset(default_id).description)
 
     def update_description() -> None:
         description_var.set(get_preset(selected.get()).description)
@@ -81,14 +110,8 @@ def _choose_export_preset(root: tk.Tk) -> str:
     tk.Button(buttons, text="Avbryt / standard", command=cancel, width=18).pack(side="right")
 
     dialog.protocol("WM_DELETE_WINDOW", cancel)
-    dialog.update_idletasks()
-
-    # Placera dialogen ungefär centralt på skärmen.
-    width = dialog.winfo_width()
-    height = dialog.winfo_height()
-    x = (dialog.winfo_screenwidth() // 2) - (width // 2)
-    y = (dialog.winfo_screenheight() // 2) - (height // 2)
-    dialog.geometry(f"+{x}+{y}")
+    _center_window(dialog)
+    _bring_to_front(dialog)
 
     root.wait_window(dialog)
     return result["preset_id"]
@@ -98,14 +121,21 @@ def pick_inputs() -> Dict[str, Any]:
     root = tk.Tk()
     root.withdraw()
 
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
+
     infile = filedialog.askopenfilename(
+        parent=root,
         title="Wybierz plik Excel z Artportalen",
         filetypes=[("Excel", "*.xlsx;*.xls"), ("Wszystkie pliki", "*.*")],
     )
     if not infile:
+        root.destroy()
         sys.exit("Przerwano: nie wybrano pliku wejściowego.")
 
-    outdir = filedialog.askdirectory(title="Wybierz folder zapisu wyników")
+    outdir = filedialog.askdirectory(parent=root, title="Wybierz folder zapisu wyników")
     if not outdir:
         outdir = os.path.dirname(infile)
 
@@ -116,12 +146,21 @@ def pick_inputs() -> Dict[str, Any]:
     want_full = messagebox.askyesno(
         "Dodatkowy plik?",
         "Czy wygenerować DODATKOWO pełną tabelę BEZ usuwania duplikatów (full_)?",
+        parent=root,
     )
 
     want_debug = messagebox.askyesno(
         "Tryb debug?",
         "Włączyć DEBUG (szerszy log + tls_debug.csv)?",
+        parent=root,
     )
+
+    try:
+        root.attributes("-topmost", False)
+    except Exception:
+        pass
+
+    root.destroy()
 
     return {
         "INPUT_FILE": infile,
