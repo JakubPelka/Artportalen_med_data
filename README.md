@@ -52,10 +52,18 @@ Artportalen_med_data/
 │  │  ├─ export_presets.py
 │  │  ├─ processing.py
 │  │  └─ pipeline.py
+│  ├─ export_presets/
+│  │  ├─ README.md
+│  │  ├─ kungsbacka_standard.json
+│  │  ├─ hotade_arter.json
+│  │  └─ ias_union_eu.json
 │  └─ test_data/
 │
 ├─ prod/
-│  └─ ...
+│  ├─ start.py
+│  ├─ AP_extra_uppgifter.py
+│  ├─ artportalen_enrich/
+│  └─ export_presets/
 │
 ├─ secrets/
 │  ├─ taxonomykey.txt
@@ -74,6 +82,19 @@ Folder developerski. Tutaj testujemy nowe funkcje, refaktoryzację i zmiany w lo
 ### `prod/`
 
 Folder produkcyjny. Powinien zawierać stabilną wersję skryptu, która działa i może być używana operacyjnie.
+
+### `dev/export_presets/` i `prod/export_presets/`
+
+Lokalny folder presetów dla danej wersji skryptu.
+
+Presety **nie są trzymane w root repozytorium**, tylko przy konkretnej wersji:
+
+```text
+dev/export_presets/
+prod/export_presets/
+```
+
+Dzięki temu DEV i PROD mogą mieć różne zestawy presetów bez mieszania konfiguracji.
 
 ### `secrets/`
 
@@ -229,7 +250,35 @@ python start.py
 
 ---
 
-## 7. Jak działa proces?
+## 7. Uruchamianie wersji PROD
+
+Przejdź do folderu `prod`:
+
+```bash
+cd prod
+```
+
+Uruchom:
+
+```bash
+python start.py
+```
+
+Jeśli w `prod/` utrzymywany jest także launcher kompatybilny, można ewentualnie uruchomić:
+
+```bash
+python AP_extra_uppgifter.py
+```
+
+Preferowane jest jednak:
+
+```bash
+python start.py
+```
+
+---
+
+## 8. Jak działa proces?
 
 Po uruchomieniu skryptu pojawia się proste UI, w którym użytkownik wybiera:
 
@@ -256,7 +305,7 @@ Ważne: skrypt nie odpytuje API dla każdej obserwacji osobno. Jeśli jeden gatu
 
 ---
 
-## 8. Pliki wynikowe
+## 9. Pliki wynikowe
 
 Skrypt zapisuje pliki do wybranego folderu wynikowego.
 
@@ -274,11 +323,15 @@ Tabela przeglądowa z danymi dodatkowymi.
 
 Zasadniczo jest deduplikowana po `TaxonId`, więc jeden takson powinien występować raz.
 
+Kolumny w tym pliku zależą od wybranego presetu eksportu.
+
 ### `*_bara_skyddade.xlsx`
 
 Tabela przefiltrowana do gatunków chronionych, priorytetowych lub istotnych przyrodniczo zgodnie z aktualnym filtrem.
 
 Obecnie filtr obejmuje także rödlistning od `NT` w górę.
+
+Kolumny w tym pliku zależą od wybranego presetu eksportu.
 
 ### `*_log.txt`
 
@@ -288,6 +341,7 @@ Zawiera informacje m.in. o:
 
 - pliku wejściowym,
 - folderze wyjściowym,
+- wybranym presecie,
 - wykrytym wierszu nagłówka,
 - liczbie rekordów,
 - liczbie unikalnych `TaxonId`,
@@ -302,7 +356,7 @@ Plik debugowy dla TLS, zapisywany przy włączonym trybie DEBUG.
 
 ---
 
-## 9. Filtr `_bara_skyddade`
+## 10. Filtr `_bara_skyddade`
 
 Plik `_bara_skyddade.xlsx` zawiera taksony, które spełniają przynajmniej jedno z kryteriów ochronnych lub priorytetowych.
 
@@ -361,11 +415,13 @@ Uwaga: `DD` można w przyszłości dodać jako opcję, jeśli będzie potrzebna 
 
 ### IAS Union EU
 
-`IAS_Union_EU` jest dostępne jako osobna kolumna, ale domyślnie nie jest traktowane jako formalny filtr `bara_skyddade`, chyba że zostanie użyty odpowiedni preset albo zmieniona konfiguracja eksportu.
+`IAS_Union_EU` jest dostępne jako osobna kolumna.
+
+Domyślnie nie jest traktowane jako formalny filtr `bara_skyddade`, chyba że wybrany preset ma włączony filtr IAS.
 
 ---
 
-## 10. Presety eksportu
+## 11. Presety eksportu
 
 Wersja DEV obsługuje presety eksportu.
 
@@ -376,23 +432,114 @@ Presety służą do wyboru zestawu kolumn w plikach:
 *_bara_skyddade.xlsx
 ```
 
-Nie zmieniają one sposobu pobierania danych z API. Zmieniają głównie to, które kolumny są pokazywane w wynikowych plikach przeglądowych.
+Mogą również sterować dodatkowymi ustawieniami filtra `_bara_skyddade`, np. tym, czy do filtra ma być włączona rödlistning albo IAS.
 
-Dostępne typy presetów mogą obejmować m.in.:
+Presety nie zmieniają sposobu pobierania danych z API. Zmieniają głównie to, które kolumny są pokazane w wynikowych plikach przeglądowych oraz jakie dodatkowe kryteria filtracji są aktywne.
+
+### Lokalizacja presetów
+
+Presety są trzymane lokalnie przy konkretnej wersji skryptu:
 
 ```text
-Alla kolumner — nuvarande/maximal export
-Standard — originalkolumner + viktigaste naturvårdsfält
-Kort — skyddade/prioriterade arter
-Naturvård — bredare bedömningsunderlag
-IAS / främmande arter
+dev/export_presets/
+prod/export_presets/
 ```
 
-Domyślny preset powinien być ustawiony konserwatywnie, tak aby nie ukrywać danych potrzebnych do kontroli.
+Nie są trzymane w root repozytorium.
+
+Dzięki temu DEV i PROD mogą mieć różne zestawy presetów.
+
+### Presety wbudowane i JSON
+
+Skrypt ma presety wbudowane w kodzie jako fallback.
+
+Dodatkowo czyta pliki `.json` z folderu:
+
+```text
+export_presets/
+```
+
+czyli dla DEV:
+
+```text
+dev/export_presets/
+```
+
+oraz dla PROD:
+
+```text
+prod/export_presets/
+```
+
+Presety z plików JSON są widoczne w UI i mogą być oznaczone jako presety zewnętrzne.
+
+### Podgląd presetu
+
+W UI można podejrzeć wybrany preset przed uruchomieniem skryptu.
+
+Podgląd powinien pokazać m.in.:
+
+```text
+nazwa presetu
+opis
+liczba kolumn
+lista kolumn
+czy aktywny jest filtr ochronny
+czy aktywna jest rödlistning
+jakie kategorie rödlistning są włączone
+czy aktywny jest filtr IAS
+```
+
+### Zapis kopii presetu jako JSON
+
+UI pozwala zapisać kopię aktualnie wybranego presetu jako plik JSON.
+
+Dla DEV kopia zapisuje się do:
+
+```text
+dev/export_presets/
+```
+
+Dla PROD kopia zapisuje się do:
+
+```text
+prod/export_presets/
+```
+
+To pozwala szybko utworzyć własny preset na bazie istniejącego.
+
+### Przykładowy preset JSON
+
+```json
+{
+  "id": "kungsbacka_standard",
+  "name": "Kungsbacka standard",
+  "description": "Standardexport med originalkolumner och viktigaste naturvårdsfält.",
+  "columns": [
+    "TaxonId",
+    "taxon_svensktNamn",
+    "taxon_vetenskapligtNamn",
+    "RedListCategory",
+    "Fridlyst",
+    "CITES",
+    "Bernkonventionen",
+    "FågeldirektivetBilaga1",
+    "DirectiveAppendix2",
+    "DirectiveAppendix4",
+    "IAS_Union_EU"
+  ],
+  "filter": {
+    "include_current_protection_filter": true,
+    "include_redlist_filter": true,
+    "redlist_categories": ["RE", "CR", "EN", "VU", "NT"],
+    "include_ias_union_eu_filter": false
+  }
+}
+```
 
 ---
 
-## 11. Auto-wykrywanie nagłówka w eksporcie Artportalen
+## 12. Auto-wykrywanie nagłówka w eksporcie Artportalen
 
 Oryginalny eksport z Artportalen może zawierać na początku dodatkowe wiersze opisowe. Często są to dwa pierwsze wiersze.
 
@@ -414,7 +561,7 @@ Wykryto dodatkowe wiersze przed nagłówkiem: 2. Czytam dane od wiersza 3.
 
 ---
 
-## 12. Riskklassning
+## 13. Riskklassning
 
 Skrypt może wykonać merge z plikiem:
 
@@ -449,7 +596,7 @@ Riskklassning*.xlsx nie znaleziony — pomijam merge.
 
 ---
 
-## 13. Ważne założenia techniczne
+## 14. Ważne założenia techniczne
 
 ### API tylko dla unikalnych `TaxonId`
 
@@ -491,7 +638,7 @@ mogą być czyszczone do pustych wartości w wybranych kolumnach, żeby eksport 
 
 ---
 
-## 14. Tryb DEBUG
+## 15. Tryb DEBUG
 
 Tryb DEBUG służy do testowania i kontroli działania TLS oraz pobierania danych.
 
@@ -505,14 +652,15 @@ Na potrzeby normalnej pracy tryb DEBUG może być wyłączony.
 
 ---
 
-## 15. Zalecany workflow pracy z repo
+## 16. Zalecany workflow pracy z repo
 
 ### Normalne użycie
 
 1. Używaj wersji z `prod/`.
 2. Wybierz eksport Excel z Artportalen.
 3. Wybierz folder wynikowy.
-4. Sprawdź wynikowe pliki Excel.
+4. Wybierz preset eksportu.
+5. Sprawdź wynikowe pliki Excel.
 
 ### Rozwój i testy
 
@@ -521,6 +669,14 @@ Na potrzeby normalnej pracy tryb DEBUG może być wyłączony.
 3. Sprawdź log.
 4. Porównaj wynik z wersją produkcyjną.
 5. Dopiero po testach przenieś zmiany do `prod/`.
+
+### Praca z presetami
+
+1. Presety testowe dodawaj najpierw w `dev/export_presets/`.
+2. Po sprawdzeniu możesz przenieść je do `prod/export_presets/`.
+3. Nie trzymaj presetów w root repozytorium.
+4. Jeśli preset zawiera tylko konfigurację kolumn i filtrów, może być commitowany.
+5. Nie zapisuj w presetach tokenów, ścieżek prywatnych ani danych wrażliwych.
 
 ### Zasada bezpieczeństwa
 
@@ -536,14 +692,13 @@ plików tymczasowych
 
 ---
 
-## 16. Planowane / możliwe ulepszenia
+## 17. Planowane / możliwe ulepszenia
 
 Potencjalne następne kroki:
 
-- zapis presetów eksportu do zewnętrznych plików JSON,
 - osobne presety dla `with_data`, `bara_skyddade` i `full`,
 - opcjonalne włączanie `DD` do filtra priorytetowego,
-- opcjonalne włączanie `IAS_Union_EU` do osobnego pliku wynikowego,
+- opcjonalne generowanie osobnego pliku dla `IAS_Union_EU`,
 - prostszy raport HTML z podsumowaniem liczby gatunków w kategoriach `RE/CR/EN/VU/NT/LC`,
 - kontrola jakości wejścia przed startem,
 - wykrywanie podejrzanych braków `TaxonId`,
@@ -553,7 +708,7 @@ Potencjalne następne kroki:
 
 ---
 
-## 17. Szybka diagnoza problemów
+## 18. Szybka diagnoza problemów
 
 ### Skrypt nie startuje i zgłasza brak pliku z kluczem
 
@@ -572,6 +727,12 @@ listskey.txt
 ```
 
 Folder `secrets/` powinien być w root repozytorium, nie w `dev/` ani `prod/`.
+
+### Po wyborze folderu wygląda, jakby program się zawiesił
+
+Sprawdź, czy nie otworzyło się okno wyboru presetu za innym oknem.
+
+Aktualna wersja UI powinna wymuszać pokazanie okna na wierzchu, ale w razie problemów warto sprawdzić pasek zadań albo `Alt+Tab`.
 
 ### Skrypt czyta zły nagłówek Excela
 
@@ -607,9 +768,25 @@ Sprawdź log i liczbę unikalnych `TaxonId`.
 
 Jeśli wejście ma bardzo wiele unikalnych taksonów, czas działania będzie dłuższy. Powtórzone obserwacje tego samego taksonu nie powinny jednak zwiększać liczby zapytań API.
 
+### Nie widzę swojego presetu w UI
+
+Sprawdź, czy plik `.json` znajduje się w odpowiednim folderze:
+
+```text
+dev/export_presets/
+```
+
+albo, dla wersji produkcyjnej:
+
+```text
+prod/export_presets/
+```
+
+Sprawdź też, czy JSON jest poprawny składniowo.
+
 ---
 
-## 18. Status projektu
+## 19. Status projektu
 
 Projekt działa, ale nadal jest rozwijany.
 
@@ -625,21 +802,28 @@ Aktualny stan:
 ✅ zachowuje pełne obserwacje w full export
 ✅ filtruje skyddade/prioriterade z uwzględnieniem RedListCategory od NT w górę
 ✅ obsługuje presety eksportu
+✅ obsługuje presety JSON w dev/export_presets/ i prod/export_presets/
+✅ pozwala podejrzeć preset przed uruchomieniem
+✅ pozwala zapisać kopię presetu jako JSON
 ⚠️ wymaga dalszych testów na różnych eksportach
 ⚠️ wymaga ostrożności przy przenoszeniu zmian z dev do prod
 ```
 
 ---
 
-## 19. Krótkie TL;DR
+## 20. Krótkie TL;DR
 
 ```text
 1. Tokeny trzymaj lokalnie w /secrets.
 2. Uruchamiaj DEV przez: python start.py.
-3. Wybierz Excel z Artportalen i folder wynikowy.
-4. Skrypt sam wykryje nagłówek i pobierze dane po unikalnych TaxonId.
-5. full_ zachowuje wszystkie obserwacje.
-6. with_data jest przeglądem po TaxonId.
-7. bara_skyddade zawiera gatunki chronione / priorytetowe oraz rödlistade od NT w górę.
-8. Riskklassning2024.xlsx trzymaj najlepiej w root repo.
-9. secrets/ i results/ nie powinny trafiać do GitHub.
+3. Presety DEV trzymaj w dev/export_presets/.
+4. Presety PROD trzymaj w prod/export_presets/.
+5. Wybierz Excel z Artportalen i folder wynikowy.
+6. Wybierz preset eksportu.
+7. Skrypt sam wykryje nagłówek i pobierze dane po unikalnych TaxonId.
+8. full_ zachowuje wszystkie obserwacje.
+9. with_data jest przeglądem po TaxonId.
+10. bara_skyddade zawiera gatunki chronione / priorytetowe oraz rödlistade od NT w górę.
+11. Riskklassning2024.xlsx trzymaj najlepiej w root repo.
+12. secrets/ i results/ nie powinny trafiać do GitHub.
+```

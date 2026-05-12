@@ -106,6 +106,11 @@ PROTECTION_COLUMNS = [
     "Fridlyst",
 ]
 
+# Standard-rödlistning som ska ingå i _bara_skyddade / prioriterade arter.
+# "Od NT w górę" to RE, CR, EN, VU, NT. LC, NA, NE och DD filtreras bort
+# om de inte samtidigt har annan skydds-/naturvårdsflagga.
+DEFAULT_REDLIST_PROTECTION_CATEGORIES = {"RE", "CR", "EN", "VU", "NT"}
+
 
 def has_list_flag(lists: Any, list_name: str) -> str:
     ln = (list_name or "").strip().lower()
@@ -397,10 +402,51 @@ def clean_flag_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def has_protection(row: pd.Series) -> bool:
+def has_redlist_protection(row: pd.Series, redlist_categories: set[str] | None = None) -> bool:
+    """Returnerar True om RedListCategory finns i valt kategoriurval."""
+    if "RedListCategory" not in row.index:
+        return False
+    categories = redlist_categories or DEFAULT_REDLIST_PROTECTION_CATEGORIES
+    category = str(row.get("RedListCategory") or "").strip().upper()
+    return category in categories
+
+
+def has_current_protection_flag(row: pd.Series) -> bool:
+    """Returnerar True om någon av de etablerade skydds-/naturvårdsflaggorna är ifylld."""
     for col in PROTECTION_COLUMNS:
         if col in row.index and not is_empty_value(row.get(col)):
             return True
+    return False
+
+
+def has_ias_union_eu_flag(row: pd.Series) -> bool:
+    """Returnerar True om IAS_Union_EU är ifylld."""
+    if "IAS_Union_EU" not in row.index:
+        return False
+    return not is_empty_value(row.get("IAS_Union_EU"))
+
+
+def has_protection(row: pd.Series, preset: object | None = None) -> bool:
+    """Filter för *_bara_skyddade.xlsx.
+
+    Default: nuvarande skydds-/naturvårdsflaggor + rödlistning RE/CR/EN/VU/NT.
+    Om preset innehåller filterinställningar används dessa.
+    """
+    include_current = getattr(preset, "include_current_protection_filter", True)
+    include_redlist = getattr(preset, "include_redlist_filter", True)
+    include_ias = getattr(preset, "include_ias_union_eu_filter", False)
+    redlist_categories = {
+        str(x).strip().upper()
+        for x in getattr(preset, "redlist_categories", DEFAULT_REDLIST_PROTECTION_CATEGORIES)
+        if str(x).strip()
+    }
+
+    if include_current and has_current_protection_flag(row):
+        return True
+    if include_redlist and has_redlist_protection(row, redlist_categories):
+        return True
+    if include_ias and has_ias_union_eu_flag(row):
+        return True
     return False
 
 
@@ -417,8 +463,8 @@ def make_overview(full_enriched: pd.DataFrame) -> pd.DataFrame:
     return overview
 
 
-def make_protected(overview: pd.DataFrame) -> pd.DataFrame:
-    protected = overview[overview.apply(lambda r: has_protection(r), axis=1)].copy()
+def make_protected(overview: pd.DataFrame, preset: object | None = None) -> pd.DataFrame:
+    protected = overview[overview.apply(lambda r: has_protection(r, preset), axis=1)].copy()
     protected.replace(["N/A", "0", 0, None], "", inplace=True)
     protected = sort_by_redlist(protected)
     return protected

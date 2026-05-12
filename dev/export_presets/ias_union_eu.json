@@ -1,0 +1,29 @@
+{
+  "preset_id": "ias_union_eu",
+  "label": "IAS Union EU",
+  "description": "Profil för främmande/invasiva arter. _bara_skyddade filtreras här på IAS_Union_EU, inte på skyddsflaggor eller rödlistning.",
+  "include_all_columns": false,
+  "include_original_columns": true,
+  "original_column_candidates": [],
+  "enrichment_columns": [
+    "TaxonId",
+    "ScientificName",
+    "SwedishName",
+    "DisplayName",
+    "Category",
+    "RedListCategory",
+    "IAS_Union_EU",
+    "AlienSpeciesRiskCategories",
+    "AlienSpeciesEnvironments",
+    "AlienSpeciesEcologyEffect",
+    "AlienSpeciesTaxonLists",
+    "AlienSpeciesInvationPotentials",
+    "AlienSpeciesRegions"
+  ],
+  "filter": {
+    "include_current_protection_filter": false,
+    "include_redlist_filter": false,
+    "redlist_categories": [],
+    "include_ias_union_eu_filter": true
+  }
+}

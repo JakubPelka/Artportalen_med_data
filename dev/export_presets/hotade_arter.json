@@ -1,0 +1,34 @@
+{
+  "preset_id": "hotade_arter",
+  "label": "Hotade arter — CR/EN/VU",
+  "description": "Fokuserad profil för hotade arter. _bara_skyddade filtreras med nuvarande skyddsflaggor plus rödlistningskategorierna CR, EN och VU. NT ingår inte i detta preset.",
+  "include_all_columns": false,
+  "include_original_columns": false,
+  "original_column_candidates": [
+    "TaxonId",
+    "taxon_svensktNamn",
+    "taxon_vetenskapligtNamn",
+    "Kommun",
+    "Lokalnamn"
+  ],
+  "enrichment_columns": [
+    "TaxonId",
+    "ScientificName",
+    "SwedishName",
+    "RedListCategory",
+    "RedListCriterion",
+    "ConservationStatus",
+    "Fridlyst",
+    "CITES",
+    "FågeldirektivetBilaga1",
+    "DirectiveAppendix2",
+    "DirectiveAppendix4",
+    "ActionProgramName"
+  ],
+  "filter": {
+    "include_current_protection_filter": true,
+    "include_redlist_filter": true,
+    "redlist_categories": ["CR", "EN", "VU"],
+    "include_ias_union_eu_filter": false
+  }
+}

@@ -6,9 +6,17 @@ import sys
 from typing import Any, Dict
 
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
+from tkinter.scrolledtext import ScrolledText
 
-from .export_presets import get_default_preset_id, get_preset, list_presets
+from .export_presets import (
+    EXTERNAL_PRESETS_DIR,
+    get_default_preset_id,
+    get_preset,
+    list_presets,
+    preset_summary_text,
+    save_preset_copy,
+)
 
 
 def _center_window(window: tk.Toplevel) -> None:
@@ -38,64 +46,153 @@ def _bring_to_front(window: tk.Toplevel) -> None:
         pass
 
 
+def _show_preset_preview(root: tk.Tk, preset_id: str) -> None:
+    """Visar en läsbar förhandsvisning av vald exportprofil."""
+    win = tk.Toplevel(root)
+    win.title("Podgląd / förhandsvisning presetu")
+    win.geometry("760x620")
+    win.minsize(640, 420)
+
+    frame = tk.Frame(win, padx=12, pady=12)
+    frame.pack(fill="both", expand=True)
+
+    text = ScrolledText(frame, wrap="word", width=90, height=32)
+    text.pack(fill="both", expand=True)
+    text.insert("1.0", preset_summary_text(preset_id))
+    text.configure(state="disabled")
+
+    buttons = tk.Frame(frame)
+    buttons.pack(fill="x", pady=(10, 0))
+    tk.Button(buttons, text="OK", command=win.destroy, width=12).pack(side="right")
+
+    _center_window(win)
+    _bring_to_front(win)
+    win.grab_set()
+    root.wait_window(win)
+
+
 def _choose_export_preset(root: tk.Tk) -> str:
-    """Visar enkel dialog för val av exportprofil."""
-    presets = list_presets()
+    """Visar dialog för val, preview och sparande av exportprofil."""
     default_id = get_default_preset_id()
     selected = tk.StringVar(master=root, value=default_id)
+    description_var = tk.StringVar(master=root, value=get_preset(default_id).description)
+    folder_var = tk.StringVar(master=root, value=f"Presetfolder: {EXTERNAL_PRESETS_DIR}")
     result = {"preset_id": default_id}
 
     dialog = tk.Toplevel(root)
     dialog.title("Välj exportprofil")
-    dialog.resizable(False, False)
+    dialog.geometry("760x560")
+    dialog.minsize(680, 500)
 
     # Viktigt: använd inte enbart transient(root) när root är withdraw(),
     # eftersom dialogen då kan hamna bakom andra fönster i Windows.
     dialog.grab_set()
 
-    frame = tk.Frame(dialog, padx=14, pady=12)
-    frame.pack(fill="both", expand=True)
+    outer = tk.Frame(dialog, padx=14, pady=12)
+    outer.pack(fill="both", expand=True)
 
     title = tk.Label(
-        frame,
-        text="Välj vilka kolumner som ska skrivas till _with_data och _bara_skyddade.",
+        outer,
+        text=(
+            "Välj vilka kolumner som ska skrivas till _with_data och _bara_skyddade. "
+            "Egna JSON-presets läses från dev/export_presets eller prod/export_presets, "
+            "beroende på vilken version som körs."
+        ),
         justify="left",
         anchor="w",
-        wraplength=620,
+        wraplength=710,
     )
-    title.pack(fill="x", pady=(0, 10))
+    title.pack(fill="x", pady=(0, 8))
 
-    description_var = tk.StringVar(master=root, value=get_preset(default_id).description)
+    folder_label = tk.Label(
+        outer,
+        textvariable=folder_var,
+        justify="left",
+        anchor="w",
+        wraplength=710,
+        fg="#555555",
+    )
+    folder_label.pack(fill="x", pady=(0, 8))
+
+    preset_frame = tk.Frame(outer, relief="groove", bd=1, padx=8, pady=6)
+    preset_frame.pack(fill="both", expand=True)
 
     def update_description() -> None:
         description_var.set(get_preset(selected.get()).description)
 
-    for preset in presets:
-        rb = tk.Radiobutton(
-            frame,
-            text=preset.label,
-            variable=selected,
-            value=preset.preset_id,
-            command=update_description,
-            anchor="w",
-            justify="left",
-            wraplength=620,
-        )
-        rb.pack(fill="x", anchor="w")
+    def rebuild_preset_buttons() -> None:
+        for child in preset_frame.winfo_children():
+            child.destroy()
+
+        presets = list_presets()
+        available_ids = {p.preset_id for p in presets}
+        if selected.get() not in available_ids:
+            selected.set(default_id)
+
+        for preset in presets:
+            source_suffix = ""
+            if preset.source == "json":
+                source_suffix = "  [JSON]"
+            rb = tk.Radiobutton(
+                preset_frame,
+                text=f"{preset.label}{source_suffix}",
+                variable=selected,
+                value=preset.preset_id,
+                command=update_description,
+                anchor="w",
+                justify="left",
+                wraplength=690,
+            )
+            rb.pack(fill="x", anchor="w")
+        update_description()
+
+    rebuild_preset_buttons()
 
     desc = tk.Label(
-        frame,
+        outer,
         textvariable=description_var,
         justify="left",
         anchor="w",
-        wraplength=620,
+        wraplength=710,
         relief="groove",
         padx=8,
         pady=6,
     )
-    desc.pack(fill="x", pady=(12, 12))
+    desc.pack(fill="x", pady=(10, 8))
 
-    buttons = tk.Frame(frame)
+    tool_buttons = tk.Frame(outer)
+    tool_buttons.pack(fill="x", pady=(0, 10))
+
+    def preview() -> None:
+        _show_preset_preview(root, selected.get())
+
+    def save_copy() -> None:
+        current = get_preset(selected.get())
+        name = simpledialog.askstring(
+            "Spara egen preset",
+            "Namn för ny preset JSON:\n\n"
+            "Preset sparas i dev/export_presets eller prod/export_presets beroende på var skrypt startas.",
+            initialvalue=f"Kopia av {current.label}",
+            parent=dialog,
+        )
+        if not name:
+            return
+        try:
+            new_id, path = save_preset_copy(selected.get(), name)
+            selected.set(new_id)
+            rebuild_preset_buttons()
+            messagebox.showinfo(
+                "Preset sparad",
+                f"Preset zapisany jako JSON:\n\n{path}\n\nMożesz edytować ten plik ręcznie i uruchomić skrypt ponownie.",
+                parent=dialog,
+            )
+        except Exception as e:
+            messagebox.showerror("Błąd zapisu presetu", str(e), parent=dialog)
+
+    tk.Button(tool_buttons, text="Podgląd presetu", command=preview, width=18).pack(side="left")
+    tk.Button(tool_buttons, text="Zapisz kopię jako JSON", command=save_copy, width=24).pack(side="left", padx=(8, 0))
+
+    buttons = tk.Frame(outer)
     buttons.pack(fill="x")
 
     def ok() -> None:
