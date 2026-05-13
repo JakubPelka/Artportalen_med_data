@@ -1,6 +1,15 @@
 # Artportalen_med_data
 
-Skrypt do wzbogacania eksportu z Artportalen o dodatkowe informacje pobierane z API SLU Artdatabanken / ArtDatabanken.
+Skrypt do wzbogacania eksportów gatunkowych o dodatkowe informacje pobierane z API SLU Artdatabanken / ArtDatabanken.
+
+Projekt obsługuje obecnie dwa typy danych wejściowych:
+
+```text
+1. Eksport Excel z Artportalen
+2. Dane / eksport z ArcGIS Online (AGOL)
+```
+
+Oba warianty korzystają z tego samego silnika wzbogacania danych. Różni się tylko etap przygotowania wejścia: Artportalen zwykle ma już `TaxonId`, natomiast AGOL może wymagać dopasowania nazw gatunków do `TaxonId`.
 
 Projekt jest prowadzony w strukturze `dev` / `prod`, żeby można było rozwijać i testować nowe funkcje bez ryzyka uszkodzenia stabilnej wersji produkcyjnej.
 
@@ -8,7 +17,7 @@ Projekt jest prowadzony w strukturze `dev` / `prod`, żeby można było rozwija�
 
 ## 1. Główne zadanie skryptu
 
-Skrypt bierze plik Excel z eksportu Artportalen i dopisuje informacje o taksonach, m.in.:
+Skrypt bierze plik Excel z danymi gatunkowymi i dopisuje informacje o taksonach, m.in.:
 
 - nazwy i kategorię taksonomiczną,
 - status czerwonej listy,
@@ -27,6 +36,8 @@ Skrypt bierze plik Excel z eksportu Artportalen i dopisuje informacje o taksonac
 
 Skrypt automatycznie wykrywa właściwy wiersz nagłówka w eksporcie Artportalen. Oryginalny eksport może mieć na początku dodatkowe wiersze opisowe — nie trzeba ich usuwać ręcznie.
 
+Dla danych AGOL skrypt próbuje rozpoznać kolumny z nazwą szwedzką, nazwą naukową oraz ewentualnym `TaxonId`, a następnie standaryzuje je do wspólnego formatu używanego przez dalszy pipeline.
+
 ---
 
 ## 2. Struktura repozytorium
@@ -35,7 +46,6 @@ Skrypt automatycznie wykrywa właściwy wiersz nagłówka w eksporcie Artportale
 Artportalen_med_data/
 ├─ dev/
 │  ├─ start.py
-│  ├─ AP_extra_uppgifter_DEV.py
 │  ├─ artportalen_enrich/
 │  │  ├─ __init__.py
 │  │  ├─ config.py
@@ -43,6 +53,7 @@ Artportalen_med_data/
 │  │  ├─ ui.py
 │  │  ├─ utils.py
 │  │  ├─ excel_io.py
+│  │  ├─ input_loaders.py
 │  │  ├─ taxon_client.py
 │  │  ├─ species_helpers.py
 │  │  ├─ tls_client.py
@@ -60,7 +71,6 @@ Artportalen_med_data/
 │
 ├─ prod/
 │  ├─ start.py
-│  ├─ AP_extra_uppgifter.py
 │  ├─ artportalen_enrich/
 │  └─ export_presets/
 │
@@ -81,6 +91,30 @@ Folder developerski. Tutaj testujemy nowe funkcje.
 ### `prod/`
 
 Folder produkcyjny. Powinien zawierać stabilną, sprawdzoną wersję.
+
+### `start.py`
+
+Główny i docelowo jedyny plik startowy.
+
+Uruchamianie powinno odbywać się przez:
+
+```bash
+python start.py
+```
+
+Starsze launchery typu `AP_extra_uppgifter_DEV.py` albo `Agol_DEV.py` mogą istnieć tymczasowo tylko jako zgodność wsteczna, ale docelowo nie powinny być potrzebne.
+
+### `artportalen_enrich/input_loaders.py`
+
+Moduł odpowiedzialny za przygotowanie danych wejściowych.
+
+Obsługuje:
+
+```text
+Artportalen export
+AGOL / ArcGIS Online export
+Auto-detect
+```
 
 ### `dev/export_presets/` i `prod/export_presets/`
 
@@ -196,12 +230,6 @@ cd dev
 python start.py
 ```
 
-Alternatywnie:
-
-```bash
-python AP_extra_uppgifter_DEV.py
-```
-
 ### PROD
 
 ```bash
@@ -209,54 +237,97 @@ cd prod
 python start.py
 ```
 
-Alternatywnie:
-
-```bash
-python AP_extra_uppgifter.py
-```
-
-Preferowany launcher to zawsze:
+Docelowo używamy wyłącznie:
 
 ```bash
 python start.py
 ```
 
+Nie ma potrzeby utrzymywania osobnych skryptów startowych dla Artportalen i AGOL.
+
 ---
 
-## 7. Jak działa proces?
+## 7. Źródło danych wejściowych
+
+W UI użytkownik wybiera źródło danych:
+
+```text
+Auto-detect
+Artportalen export
+AGOL / ArcGIS Online export
+```
+
+### Auto-detect
+
+Skrypt próbuje sam rozpoznać typ danych po kolumnach wejściowych.
+
+Typowe sygnały Artportalen:
+
+```text
+TaxonId
+taxon_svensktNamn
+taxon_vetenskapligtNamn
+```
+
+Typowe sygnały AGOL:
+
+```text
+OBJECTID
+GlobalID
+created_user
+created_date
+Shape
+kolumny z nazwą gatunku / artnamn / svenskt namn / vetenskapligt namn
+```
+
+Jeśli auto-detekcja jest niepewna, najlepiej ręcznie wybrać źródło w UI.
+
+### Artportalen export
+
+Eksport Artportalen może zawierać dodatkowe wiersze opisowe przed właściwym nagłówkiem. Skrypt potrafi je wykryć i pominąć.
+
+### AGOL / ArcGIS Online export
+
+Dane AGOL mogą nie mieć `TaxonId`. Wtedy skrypt próbuje dopasować takson po nazwie szwedzkiej lub naukowej.
+
+Ważne: dla AGOL dopasowanie `TaxonId` jest wykonywane po unikalnych parach nazw, a nie naiwnie rekord po rekordzie. Jeśli ta sama nazwa występuje wiele razy, TaxonService jest odpytywany tylko raz dla tej nazwy.
+
+---
+
+## 8. Jak działa proces?
 
 Po uruchomieniu skryptu użytkownik wybiera w UI:
 
 1. plik wejściowy Excel,
 2. folder wyjściowy,
-3. tryb DEBUG,
-4. preset eksportu.
+3. źródło danych: `Auto-detect`, `Artportalen` albo `AGOL`,
+4. tryb DEBUG,
+5. preset eksportu.
 
 Następnie skrypt:
 
-1. wykrywa właściwy wiersz nagłówka,
-2. czyta plik Excel,
-3. sprawdza kolumnę `TaxonId`,
-4. jeśli `TaxonId` brakuje, próbuje dopasować takson po nazwie,
-5. tworzy listę unikalnych `TaxonId > 0`,
-6. odpytuje API tylko raz dla każdego unikalnego `TaxonId`,
-7. pobiera dane z SpeciesDataService i TaxonListService,
-8. buduje tabelę z dodatkowymi kolumnami,
-9. scala dane z pełnym eksportem wejściowym,
-10. zapisuje pliki wynikowe,
-11. opcjonalnie wykonuje merge z `Riskklassning2024.xlsx`.
-
-Ważne: jeśli ten sam gatunek występuje w eksporcie wiele razy, API jest odpytywane tylko raz dla jego `TaxonId`.
+1. wczytuje plik wejściowy odpowiednim importerem,
+2. dla Artportalen wykrywa właściwy wiersz nagłówka,
+3. dla AGOL standaryzuje kolumny nazw i `TaxonId`,
+4. sprawdza kolumnę `TaxonId`,
+5. jeśli `TaxonId` brakuje, próbuje dopasować takson po nazwie,
+6. tworzy listę unikalnych `TaxonId > 0`,
+7. odpytuje API tylko raz dla każdego unikalnego `TaxonId`,
+8. pobiera dane z SpeciesDataService i TaxonListService,
+9. buduje tabelę z dodatkowymi kolumnami,
+10. scala dane z pełnym eksportem wejściowym,
+11. zapisuje pliki wynikowe,
+12. opcjonalnie wykonuje merge z `Riskklassning2024.xlsx`.
 
 ---
 
-## 8. Pliki wynikowe
+## 9. Pliki wynikowe
 
 ### `*_full_.xlsx`
 
-Pełna tabela. Zawiera wszystkie obserwacje z pliku wejściowego oraz dopisane dane z API.
+Pełna tabela. Zawiera wszystkie rekordy z pliku wejściowego oraz dopisane dane z API.
 
-Ten plik zachowuje powtórzenia obserwacji.
+Ten plik zachowuje powtórzenia obserwacji / rekordów.
 
 ### `*_with_data.xlsx`
 
@@ -282,7 +353,7 @@ Plik debugowy dla TLS, tworzony przy włączonym DEBUG.
 
 ---
 
-## 9. Najważniejsze źródła danych w skrypcie
+## 10. Najważniejsze źródła danych w skrypcie
 
 Skrypt korzysta głównie z trzech typów danych:
 
@@ -298,15 +369,13 @@ W wielu kolumnach skrypt stosuje zasadę:
 najpierw TaxonListService, potem fallback z SpeciesDataService / natureConservation.lists
 ```
 
-Dzięki temu flaga może zostać uzupełniona nawet wtedy, gdy jedna z metod nie zwróci informacji.
-
 ---
 
-## 10. Kolumny dodawane przez skrypt z danych API SLU
+## 11. Kolumny dodawane przez skrypt z danych API SLU
 
-Poniżej znajduje się opis kolumn dodawanych przez skrypt. To są kolumny wzbogacające eksport z Artportalen.
+Poniżej znajduje się opis kolumn dodawanych przez skrypt. To są kolumny wzbogacające dane wejściowe z Artportalen albo AGOL.
 
-### 10.1. Podstawowe dane taksonomiczne
+### 11.1. Podstawowe dane taksonomiczne
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -317,7 +386,7 @@ Poniżej znajduje się opis kolumn dodawanych przez skrypt. To są kolumny wzbog
 
 ---
 
-### 10.2. Czerwona lista
+### 11.2. Czerwona lista
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -337,7 +406,7 @@ Kategorie `LC`, `NA`, `NE`, `DD` i puste wartości nie trafiają do `_bara_skydd
 
 ---
 
-### 10.3. Åtgärdsprogram i naturvård
+### 11.3. Åtgärdsprogram i naturvård
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -354,7 +423,7 @@ Kategorie `LC`, `NA`, `NE`, `DD` i puste wartości nie trafiają do `_bara_skydd
 
 ---
 
-### 10.4. Konwencje międzynarodowe
+### 11.4. Konwencje międzynarodowe
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -364,7 +433,7 @@ Kategorie `LC`, `NA`, `NE`, `DD` i puste wartości nie trafiają do `_bara_skydd
 
 ---
 
-### 10.5. Fågeldirektivet
+### 11.5. Fågeldirektivet
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -377,7 +446,7 @@ Uwaga techniczna: `FågeldirektivetBilaga2` jest osobną kolumną. Nie jest mies
 
 ---
 
-### 10.6. Fridlysning i przepisy ochronne
+### 11.6. Fridlysning i przepisy ochronne
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -387,11 +456,11 @@ Uwaga techniczna: `FågeldirektivetBilaga2` jest osobną kolumną. Nie jest mies
 
 ---
 
-### 10.7. Habitatdirektivet
+### 11.7. Habitatdirektivet
 
 | Kolumna | Wyjaśnienie |
 |---|---|
-| `DirectiveAppendix2` | Habitatdirektivet Bilaga 2. W tej wersji logika została zawężona, żeby nie mylić jej z Fågeldirektivet Bilaga 2. |
+| `DirectiveAppendix2` | Habitatdirektivet Bilaga 2. Logika jest zawężona, żeby nie mylić jej z Fågeldirektivet Bilaga 2. |
 | `DirectiveAppendix2Priority` | Habitatdirektivet Bilaga 2, gatunek priorytetowy. |
 | `DirectiveAppendix4` | Habitatdirektivet Bilaga 4. |
 | `DirectiveAppendix5` | Habitatdirektivet Bilaga 5. |
@@ -400,7 +469,7 @@ Uwaga techniczna: `FågeldirektivetBilaga2` jest osobną kolumną. Nie jest mies
 
 ---
 
-### 10.8. Teksty Artfakta / opisy gatunku
+### 11.8. Teksty Artfakta / opisy gatunku
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -415,7 +484,7 @@ Te pola mogą być dłuższymi tekstami. Ich dostępność zależy od taksonu.
 
 ---
 
-### 10.9. Obecność, pochodzenie i ekologia
+### 11.9. Obecność, pochodzenie i ekologia
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -429,7 +498,7 @@ Te pola mogą być dłuższymi tekstami. Ich dostępność zależy od taksonu.
 
 ---
 
-### 10.10. Främmande arter, IAS i risklista
+### 11.10. Främmande arter, IAS i risklista
 
 | Kolumna | Wyjaśnienie |
 |---|---|
@@ -457,7 +526,7 @@ Te kolumny są używane do tworzenia pliku:
 
 ---
 
-## 11. Filtr `_bara_skyddade.xlsx`
+## 12. Filtr `_bara_skyddade.xlsx`
 
 Do `_bara_skyddade.xlsx` trafia takson, jeśli spełnia przynajmniej jedno z kryteriów:
 
@@ -500,7 +569,7 @@ RE, CR, EN, VU, NT
 
 ---
 
-## 12. Filtr `_frammande_invasiva.xlsx`
+## 13. Filtr `_frammande_invasiva.xlsx`
 
 Do `_frammande_invasiva.xlsx` trafia takson, jeśli spełnia przynajmniej jedno z kryteriów związanych z främmande arter / IAS / risklista.
 
@@ -528,7 +597,7 @@ Ten plik jest oddzielony od `_bara_skyddade.xlsx`, bo gatunek obcy/inwazyjny nie
 
 ---
 
-## 13. Presety eksportu
+## 14. Presety eksportu
 
 Presety sterują tym, które kolumny są widoczne w plikach przeglądowych oraz jakie filtry są aktywne.
 
@@ -577,60 +646,6 @@ UI zawiera prosty edytor presetów. Można przez niego:
 - włączyć/wyłączyć filtr IAS,
 - zapisać nowy preset jako JSON.
 
-Edycja zapisuje nowy plik JSON w:
-
-```text
-dev/export_presets/
-```
-
-albo w wersji produkcyjnej:
-
-```text
-prod/export_presets/
-```
-
----
-
-## 14. Przykład presetu JSON
-
-```json
-{
-  "id": "frammande_invasiva",
-  "name": "Främmande / invasiva arter",
-  "description": "Preset för främmande arter, IAS och risklista.",
-  "include_all_columns": false,
-  "include_original_columns": true,
-  "columns": [
-    "TaxonId",
-    "taxon_svensktNamn",
-    "taxon_vetenskapligtNamn",
-    "ScientificName",
-    "SwedishName",
-    "RedListCategory",
-    "FrammandeArter",
-    "FrammandeArterISverige",
-    "IAS_Union_EU",
-    "RisklistaFrammandeArter",
-    "Risklista_SE",
-    "Risklista_HI",
-    "Risklista_PH",
-    "Risklista_LO",
-    "Risklista_NK",
-    "AlienSpeciesRiskCategories",
-    "AlienSpeciesEnvironments",
-    "AlienSpeciesEcologyEffect",
-    "AlienSpeciesInvationPotentials",
-    "AlienSpeciesRegions"
-  ],
-  "filter": {
-    "include_current_protection_filter": false,
-    "include_redlist_filter": false,
-    "redlist_categories": [],
-    "include_ias_union_eu_filter": true
-  }
-}
-```
-
 ---
 
 ## 15. Auto-wykrywanie nagłówka Artportalen
@@ -647,15 +662,34 @@ taxon_vetenskapligtNamn
 
 Jeśli nagłówek zostanie wykryty np. w trzecim wierszu, skrypt automatycznie czyta dane od tego miejsca.
 
-W logu pojawi się np.:
+---
+
+## 16. AGOL: dopasowanie nazw do `TaxonId`
+
+Dane AGOL mogą mieć różne nazwy kolumn. Skrypt próbuje rozpoznać m.in. kolumny oznaczające:
 
 ```text
-Wykryto dodatkowe wiersze przed nagłówkiem: 2. Czytam dane od wiersza 3.
+TaxonId
+nazwa szwedzka
+nazwa naukowa
 ```
+
+Jeśli `TaxonId` nie istnieje albo jest pusty, skrypt próbuje dopasować `TaxonId` przez TaxonService.
+
+Zasada działania:
+
+```text
+1. Wyciągnij unikalne nazwy / pary nazw.
+2. Odpytaj TaxonService tylko raz dla każdej unikalnej nazwy.
+3. Dopisz TaxonId z powrotem do wszystkich rekordów.
+4. Użyj wspólnego enrichmentu po TaxonId.
+```
+
+To pozwala używać tego samego pipeline zarówno dla Artportalen, jak i dla danych z AGOL.
 
 ---
 
-## 16. Riskklassning
+## 17. Riskklassning
 
 Skrypt może wykonać merge z plikiem:
 
@@ -690,11 +724,11 @@ Riskklassning*.xlsx nie znaleziony — pomijam merge.
 
 ---
 
-## 17. Ważne założenia techniczne
+## 18. Ważne założenia techniczne
 
 ### API tylko dla unikalnych `TaxonId`
 
-Skrypt zachowuje wszystkie obserwacje w `*_full_.xlsx`, ale nie odpytuje API dla każdego powtórzonego rekordu.
+Skrypt zachowuje wszystkie rekordy w `*_full_.xlsx`, ale nie odpytuje API dla każdego powtórzonego rekordu.
 
 Przykład:
 
@@ -706,21 +740,21 @@ Zapytania API: około 240, nie 1200
 
 ### `TaxonId` jest głównym kluczem
 
-Najlepiej, jeśli eksport Artportalen zawiera kolumnę:
+Najlepiej, jeśli dane wejściowe zawierają kolumnę:
 
 ```text
 TaxonId
 ```
 
-Jeśli jej brakuje, skrypt próbuje znaleźć `TaxonId` po nazwie szwedzkiej lub naukowej. Ten tryb jest wolniejszy i mniej pewny.
+Jeśli jej brakuje, skrypt próbuje znaleźć `TaxonId` po nazwie szwedzkiej lub naukowej.
 
-### `full_` zachowuje obserwacje
+### `full_` zachowuje rekordy
 
 ```text
 *_full_.xlsx
 ```
 
-zachowuje wszystkie obserwacje z wejścia.
+zachowuje wszystkie rekordy z wejścia.
 
 ```text
 *_with_data.xlsx
@@ -730,7 +764,7 @@ jest przeglądem deduplikowanym po `TaxonId`.
 
 ---
 
-## 18. Tryb DEBUG
+## 19. Tryb DEBUG
 
 Tryb DEBUG dodaje więcej informacji diagnostycznych i może zapisać:
 
@@ -742,15 +776,22 @@ Przy normalnym użyciu DEBUG może być wyłączony.
 
 ---
 
-## 19. Zalecany workflow
+## 20. Zalecany workflow
 
 ### Rozwój
 
 1. Zmieniaj tylko `dev/`.
-2. Testuj na danych testowych.
+2. Testuj osobno pliki Artportalen i AGOL.
 3. Sprawdź log.
 4. Sprawdź pliki wynikowe.
 5. Po testach przenieś do `prod/`.
+
+### Przenoszenie do PROD
+
+1. Przenieś sprawdzone moduły z `dev/` do `prod/`.
+2. Utrzymuj `start.py` jako jedyny punkt startowy.
+3. Sprawdź, czy `prod/export_presets/` zawiera potrzebne presety.
+4. Uruchom test na małym pliku.
 
 ### Presety
 
@@ -773,7 +814,7 @@ plików tymczasowych
 
 ---
 
-## 20. Szybka diagnoza problemów
+## 21. Szybka diagnoza problemów
 
 ### Brak pliku z kluczem
 
@@ -807,6 +848,26 @@ prod/export_presets/
 
 Sprawdź też poprawność składni JSON.
 
+### Auto-detect rozpoznaje zły typ źródła
+
+W UI wybierz ręcznie:
+
+```text
+Artportalen export
+```
+
+albo:
+
+```text
+AGOL / ArcGIS Online export
+```
+
+### AGOL nie dopasował `TaxonId`
+
+Sprawdź, czy plik zawiera czytelną kolumnę z nazwą gatunku, np. nazwę szwedzką albo naukową.
+
+Jeśli nazwa kolumny jest nietypowa, importer AGOL może wymagać rozszerzenia listy rozpoznawanych nazw kolumn.
+
 ### Wynik ma więcej wierszy niż oczekiwano
 
 Sprawdź, który plik oglądasz:
@@ -815,7 +876,7 @@ Sprawdź, który plik oglądasz:
 *_full_.xlsx
 ```
 
-zachowuje wszystkie obserwacje.
+zachowuje wszystkie rekordy.
 
 ```text
 *_with_data.xlsx
@@ -825,18 +886,22 @@ jest przeglądem po `TaxonId`.
 
 ---
 
-## 21. Status projektu
+## 22. Status projektu
 
 Aktualny stan:
 
 ```text
 ✅ działa na eksporcie Artportalen
+✅ obsługuje dane / eksport AGOL przez wspólny pipeline
+✅ ma Auto-detect źródła danych
 ✅ czyta tokeny z lokalnego /secrets
 ✅ ma strukturę dev/prod
+✅ używa start.py jako głównego launchera
 ✅ ma modularną strukturę kodu
-✅ automatycznie wykrywa nagłówek eksportu
+✅ automatycznie wykrywa nagłówek eksportu Artportalen
+✅ dla AGOL dopasowuje TaxonId po unikalnych nazwach
 ✅ ogranicza zapytania API do unikalnych TaxonId
-✅ zachowuje pełne obserwacje w full export
+✅ zachowuje pełne rekordy w full export
 ✅ filtruje skyddade/prioriterade z RedListCategory od NT w górę
 ✅ obsługuje SkogsstyrelsensNaturvardsarter
 ✅ obsługuje FågeldirektivetBilaga2 jako osobną kolumnę
@@ -847,25 +912,26 @@ Aktualny stan:
 ✅ obsługuje presety JSON w dev/export_presets/ i prod/export_presets/
 ✅ pozwala podejrzeć preset
 ✅ pozwala edytować i zapisać preset jako JSON
-⚠️ wymaga dalszych testów na różnych eksportach Artportalen
+⚠️ AGOL wymaga testów na realnych danych eksportowych
+⚠️ Auto-detect może wymagać dopracowania, jeśli AGOL ma nietypowe nazwy kolumn
 ⚠️ wymaga ostrożności przy przenoszeniu zmian z dev do prod
 ```
 
 ---
 
-## 22. TL;DR
+## 23. TL;DR
 
 ```text
 1. Tokeny trzymaj lokalnie w /secrets.
 2. Uruchamiaj przez python start.py.
 3. DEV rozwijaj w dev/.
 4. PROD trzymaj stabilny w prod/.
-5. Presety DEV trzymaj w dev/export_presets/.
-6. Presety PROD trzymaj w prod/export_presets/.
-7. full_ zachowuje wszystkie obserwacje.
-8. with_data jest przeglądem po TaxonId.
-9. bara_skyddade zawiera ochronne/prioriterade + RedListCategory RE/CR/EN/VU/NT.
-10. frammande_invasiva zawiera främmande arter, IAS i risklista SE/HI/PH/LO/NK.
-11. Riskklassning2024.xlsx trzymaj najlepiej w root repo.
-12. secrets/ i results/ nie commitować.
-```
+5. W UI wybierz źródło: Auto / Artportalen / AGOL.
+6. Presety DEV trzymaj w dev/export_presets/.
+7. Presety PROD trzymaj w prod/export_presets/.
+8. full_ zachowuje wszystkie rekordy.
+9. with_data jest przeglądem po TaxonId.
+10. bara_skyddade zawiera ochronne/prioriterade + RedListCategory RE/CR/EN/VU/NT.
+11. frammande_invasiva zawiera främmande arter, IAS i risklista SE/HI/PH/LO/NK.
+12. Riskklassning2024.xlsx trzymaj najlepiej w root repo.
+13. secrets/ i results/ nie commitować.
