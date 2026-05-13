@@ -868,3 +868,4 @@ Aktualny stan:
 10. frammande_invasiva zawiera främmande arter, IAS i risklista SE/HI/PH/LO/NK.
 11. Riskklassning2024.xlsx trzymaj najlepiej w root repo.
 12. secrets/ i results/ nie commitować.
+```
