@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Główny przepływ przetwarzania Artportalen export → enrich."""
+"""Główny przepływ przetwarzania Artportalen/AGOL → enrich.
+
+Enrichment SLU/API jest wspólny. Różnice między Artportalen i AGOL są obsługiwane
+na początku procesu przez input_loaders.py.
+"""
+
+from __future__ import annotations
 
 import os
 import time
@@ -8,11 +14,10 @@ from typing import Optional
 import pandas as pd
 
 from .config import NAME_QUERY_SLEEP
-from .excel_io import find_column, read_artportalen_excel
-from .logger_utils import configure_logging, get_debug_rows, is_debug, log
 from .export_presets import EXTERNAL_PRESETS_DIR, apply_export_preset, get_preset
+from .input_loaders import InputColumns, read_input_file
+from .logger_utils import configure_logging, get_debug_rows, is_debug, log
 from .processing import (
-    FLAG_COLUMNS,
     build_enrichment_table,
     make_alien_invasive,
     make_full_enriched,
@@ -27,58 +32,124 @@ from .tls_client import fetch_tls_definitions, tls_build_memberships, tls_defini
 from .ui import pick_inputs
 
 
-def _detect_input_columns(df: pd.DataFrame) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    col_taxonid = find_column(df, ["taxonid", "taxon_id", "taxon id"])
-    col_sv = find_column(
-        df,
-        [
-            "taxon_svensktnamn",
-            "taxon_svensktNamn",
-            "svensktnamn",
-            "svensk_namn",
-            "svenskt namn",
-        ],
-    ) or ("taxon_svensktNamn" if "taxon_svensktNamn" in df.columns else None)
-    col_sci = find_column(
-        df,
-        [
-            "taxon_vetenskapligtnamn",
-            "taxon_vetenskapligtNamn",
-            "vetenskapligtnamn",
-            "vetenskapligt_namn",
-            "vetenskapligt namn",
-        ],
-    ) or ("taxon_vetenskapligtNamn" if "taxon_vetenskapligtNamn" in df.columns else None)
-    return col_taxonid, col_sv, col_sci
+def _as_clean_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value).strip()
+    if text.lower() in {"nan", "none", "null", "<na>"}:
+        return ""
+    return text
 
 
-def ensure_taxon_id(df: pd.DataFrame, col_taxonid: Optional[str], col_sv: Optional[str], col_sci: Optional[str]) -> pd.DataFrame:
+def _name_key(row: pd.Series, columns: InputColumns) -> tuple[str, str]:
+    sv = _as_clean_text(row.get(columns.swedish_name, "")) if columns.swedish_name else ""
+    sci = _as_clean_text(row.get(columns.scientific_name, "")) if columns.scientific_name else ""
+    return sv, sci
+
+
+def _resolve_taxon_ids_for_unique_names(
+    df: pd.DataFrame,
+    columns: InputColumns,
+    row_mask: Optional[pd.Series] = None,
+) -> dict[tuple[str, str], int]:
+    """Resolve TaxonId raz dla każdej unikalnej pary nazwa szwedzka/naukowa."""
+    if not columns.swedish_name and not columns.scientific_name:
+        return {}
+
+    if row_mask is None:
+        subset = df
+    else:
+        subset = df.loc[row_mask]
+
+    name_keys: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for _, row in subset.iterrows():
+        key = _name_key(row, columns)
+        if not key[0] and not key[1]:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        name_keys.append(key)
+
+    log(f"Do dopasowania TaxonId po nazwach: {len(name_keys)} unikalnych nazw/par nazw.")
+
+    resolved: dict[tuple[str, str], int] = {}
+    for i, key in enumerate(name_keys, start=1):
+        sv, sci = key
+        rec = {}
+        if columns.swedish_name:
+            rec[columns.swedish_name] = sv
+        if columns.scientific_name:
+            rec[columns.scientific_name] = sci
+
+        tid = resolve_taxon_id(rec, columns.swedish_name, columns.scientific_name)
+        resolved[key] = int(tid or 0)
+
+        if i % 20 == 0 or i == len(name_keys):
+            log(f"→ dopasowano {i}/{len(name_keys)} unikalnych nazw — ostatni TaxonId={tid}")
+        time.sleep(NAME_QUERY_SLEEP)
+
+    return resolved
+
+
+def ensure_taxon_id(df: pd.DataFrame, columns: InputColumns) -> pd.DataFrame:
+    """Gwarantuje kolumnę TaxonId, wykorzystując istniejące ID albo dopasowanie po nazwach.
+
+    Dla AGOL kluczowe jest, że dopasowanie po nazwie robimy dla unikalnych nazw,
+    a nie dla każdego wiersza z osobna.
+    """
     out = df.copy()
 
-    if col_taxonid:
-        out["TaxonId"] = pd.to_numeric(out[col_taxonid], errors="coerce").fillna(0).astype("int64")
-        log("Wykryto kolumnę TaxonId — pomijam dopasowanie po nazwach.")
+    if columns.taxonid:
+        out["TaxonId"] = pd.to_numeric(out[columns.taxonid], errors="coerce").fillna(0).astype("int64")
+        valid = int((out["TaxonId"] > 0).sum())
+        missing_mask = out["TaxonId"] <= 0
+        missing = int(missing_mask.sum())
+        log(f"Wykryto kolumnę TaxonId — poprawnych TaxonId>0: {valid}, brakujących/niepoprawnych: {missing}.")
+
+        if missing == 0:
+            return out
+
+        if not columns.swedish_name and not columns.scientific_name:
+            log("Brakujące TaxonId pozostają jako 0 — brak kolumn nazw do fallbackowego dopasowania.")
+            return out
+
+        log("Uzupełniam brakujące TaxonId przez dopasowanie po nazwach.")
+        resolved = _resolve_taxon_ids_for_unique_names(out, columns, missing_mask)
+        if resolved:
+            filled = 0
+            for idx, row in out.loc[missing_mask].iterrows():
+                tid = resolved.get(_name_key(row, columns), 0)
+                if tid:
+                    out.at[idx, "TaxonId"] = int(tid)
+                    filled += 1
+            log(f"Uzupełniono TaxonId dla {filled} wierszy z brakującym/niepoprawnym TaxonId.")
         return out
 
-    if not col_sv and not col_sci:
+    if not columns.swedish_name and not columns.scientific_name:
         raise ValueError(
-            "Brak kolumny TaxonId oraz nazw ('taxon_svensktNamn' / 'taxon_vetenskapligtNamn').\n"
+            "Brak kolumny TaxonId oraz nazw do dopasowania TaxonId.\n"
+            "Oczekuję jednej z kolumn typu: TaxonId, taxon_svensktNamn, "
+            "taxon_vetenskapligtNamn, svenskt namn, vetenskapligt namn.\n"
             f"Znalezione kolumny: {', '.join(list(out.columns))}"
         )
 
-    log("Etap 1: wyznaczanie TaxonId…")
-    taxon_ids = []
-    for i, row in enumerate(out.itertuples(index=False), start=1):
-        rec = row._asdict() if hasattr(row, "_asdict") else dict(zip(out.columns, row))
-        tid = resolve_taxon_id(rec, col_sv, col_sci)
-        taxon_ids.append(tid)
+    log("Etap 1: wyznaczanie TaxonId po nazwach — tryb unikalnych nazw, nie po każdym rekordzie.")
+    resolved = _resolve_taxon_ids_for_unique_names(out, columns)
 
-        if i % 20 == 0:
-            log(f"→ {i}/{len(out)} rekordów — ostatni TaxonId={tid}")
-        time.sleep(NAME_QUERY_SLEEP)
+    taxon_ids: list[int] = []
+    for _, row in out.iterrows():
+        taxon_ids.append(int(resolved.get(_name_key(row, columns), 0) or 0))
 
     out["TaxonId"] = pd.Series(taxon_ids, dtype="int64")
-    log("Dodano kolumnę TaxonId.")
+    valid = int((out["TaxonId"] > 0).sum())
+    log(f"Dodano kolumnę TaxonId. Poprawnie dopasowane wiersze: {valid}/{len(out)}.")
     return out
 
 
@@ -119,7 +190,9 @@ def main() -> None:
     configure_logging(paths["LOG_FILE"], bool(paths["DEBUG"]))
 
     log(f"Plik wejściowy: {paths['INPUT_FILE']}")
+    log(f"Deklarowany typ wejścia: {paths.get('INPUT_SOURCE', 'auto')}")
     log(f"Folder wyjściowy: {paths['OUTDIR']}")
+
     preset = get_preset(paths.get("EXPORT_PRESET"))
     log(f"Exportprofil: {preset.label}")
     log(f"Exportprofil źródło: {preset.source}{' — ' + preset.source_path if preset.source_path else ''}")
@@ -131,9 +204,8 @@ def main() -> None:
         f"IAS_Union_EU={'tak' if preset.include_ias_union_eu_filter else 'nie'}."
     )
 
-    df = read_artportalen_excel(paths["INPUT_FILE"])
-    col_taxonid, col_sv, col_sci = _detect_input_columns(df)
-    df = ensure_taxon_id(df, col_taxonid, col_sv, col_sci)
+    input_result = read_input_file(paths["INPUT_FILE"], paths.get("INPUT_SOURCE", "auto"))
+    df = ensure_taxon_id(input_result.dataframe, input_result.columns)
 
     uniq_ids = unique_taxon_ids(df)
 

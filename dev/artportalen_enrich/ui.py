@@ -396,6 +396,82 @@ def _choose_export_preset(root: tk.Tk) -> str:
     return result["preset_id"]
 
 
+
+def _choose_input_source(root: tk.Tk) -> str:
+    """Dialog wyboru typu wejścia: Auto, Artportalen albo AGOL."""
+    default_source = os.getenv("ARTPORTALEN_DEFAULT_INPUT_SOURCE", "auto").strip().lower()
+    if default_source not in {"auto", "artportalen", "agol"}:
+        default_source = "auto"
+    selected = tk.StringVar(master=root, value=default_source)
+    result = {"source": default_source}
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Välj datakälla / wybierz źródło danych")
+    dialog.geometry("700x360")
+    dialog.minsize(620, 320)
+    dialog.grab_set()
+
+    outer = tk.Frame(dialog, padx=14, pady=12)
+    outer.pack(fill="both", expand=True)
+
+    title = tk.Label(
+        outer,
+        text=(
+            "Wybierz typ pliku wejściowego. Tryb Auto powinien rozpoznać typ po kolumnach, "
+            "ale przy eksporcie z ArcGIS Online możesz jawnie wskazać AGOL."
+        ),
+        justify="left",
+        anchor="w",
+        wraplength=660,
+    )
+    title.pack(fill="x", pady=(0, 10))
+
+    options = [
+        (
+            "auto",
+            "Auto-detect",
+            "Skrypt sam próbuje rozpoznać Artportalen albo AGOL/generic po kolumnach.",
+        ),
+        (
+            "artportalen",
+            "Artportalen export",
+            "Dla oryginalnego eksportu Artportalen. Obsługuje dodatkowe wiersze opisowe przed nagłówkiem.",
+        ),
+        (
+            "agol",
+            "AGOL / ArcGIS Online export",
+            "Dla pliku z AGOL. Nagłówek powinien być w pierwszym wierszu; TaxonId będzie dopasowany po nazwach, jeśli go brakuje.",
+        ),
+    ]
+
+    for value, label, desc in options:
+        frame = tk.Frame(outer, relief="groove", bd=1, padx=8, pady=6)
+        frame.pack(fill="x", pady=4)
+        rb = tk.Radiobutton(frame, text=label, variable=selected, value=value, anchor="w", justify="left")
+        rb.pack(fill="x", anchor="w")
+        tk.Label(frame, text=desc, justify="left", anchor="w", wraplength=630, fg="#555555").pack(fill="x", padx=(24, 0))
+
+    buttons = tk.Frame(outer)
+    buttons.pack(fill="x", pady=(10, 0))
+
+    def ok() -> None:
+        result["source"] = selected.get()
+        dialog.destroy()
+
+    def cancel() -> None:
+        result["source"] = "auto"
+        dialog.destroy()
+
+    tk.Button(buttons, text="OK", command=ok, width=12).pack(side="right", padx=(6, 0))
+    tk.Button(buttons, text="Auto / standard", command=cancel, width=18).pack(side="right")
+
+    dialog.protocol("WM_DELETE_WINDOW", cancel)
+    _center_window(dialog)
+    _bring_to_front(dialog)
+    root.wait_window(dialog)
+    return result["source"]
+
+
 def pick_inputs() -> Dict[str, Any]:
     root = tk.Tk()
     root.withdraw()
@@ -407,8 +483,8 @@ def pick_inputs() -> Dict[str, Any]:
 
     infile = filedialog.askopenfilename(
         parent=root,
-        title="Wybierz plik Excel z Artportalen",
-        filetypes=[("Excel", "*.xlsx;*.xls"), ("Wszystkie pliki", "*.*")],
+        title="Wybierz plik wejściowy: Artportalen albo AGOL",
+        filetypes=[("Excel/CSV", "*.xlsx;*.xls;*.csv;*.tsv"), ("Excel", "*.xlsx;*.xls"), ("CSV/TSV", "*.csv;*.tsv"), ("Wszystkie pliki", "*.*")],
     )
     if not infile:
         root.destroy()
@@ -419,6 +495,8 @@ def pick_inputs() -> Dict[str, Any]:
         outdir = os.path.dirname(infile)
 
     base = os.path.splitext(os.path.basename(infile))[0]
+
+    input_source = _choose_input_source(root)
 
     export_preset = _choose_export_preset(root)
 
@@ -450,6 +528,7 @@ def pick_inputs() -> Dict[str, Any]:
         "OUT_ALIEN": os.path.join(outdir, f"{base}_frammande_invasiva.xlsx"),
         "LOG_FILE": os.path.join(outdir, f"{base}_log.txt"),
         "DBG_FILE": os.path.join(outdir, "tls_debug.csv"),
+        "INPUT_SOURCE": input_source,
         "WANT_FULL": want_full,
         "DEBUG": want_debug,
         "EXPORT_PRESET": export_preset,
