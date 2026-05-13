@@ -1,37 +1,35 @@
 # Artportalen_med_data
 
-Skrypt do wzbogacania eksportu z Artportalen o dodatkowe informacje o statusie ochronnym, czerwonej liście, listach taksonomicznych i wybranych klasyfikacjach przyrodniczych.
+Skrypt do wzbogacania eksportu z Artportalen o dodatkowe informacje pobierane z API SLU Artdatabanken / ArtDatabanken.
 
-Projekt jest rozwijany w układzie `dev` / `prod`, żeby można było bezpiecznie testować nowe funkcje bez psucia działającej wersji produkcyjnej.
+Projekt jest prowadzony w strukturze `dev` / `prod`, żeby można było rozwijać i testować nowe funkcje bez ryzyka uszkodzenia stabilnej wersji produkcyjnej.
 
 ---
 
-## 1. Co robi skrypt?
+## 1. Główne zadanie skryptu
 
-Skrypt bierze plik Excel z eksportu Artportalen i dopisuje dane pobierane z API ArtDatabanken, m.in.:
+Skrypt bierze plik Excel z eksportu Artportalen i dopisuje informacje o taksonach, m.in.:
 
-- nazwę naukową i szwedzką,
-- kategorię taksonomiczną,
+- nazwy i kategorię taksonomiczną,
 - status czerwonej listy,
 - kryteria czerwonej listy,
-- informacje o fridlysning,
-- CITES,
-- Bernkonventionen,
-- Bonnkonventionen,
-- Fågeldirektivet Bilaga 1,
-- Habitatdirektivet Bilaga 2 / 2-prio / 4 / 5,
-- Prioriterade fågelarter i Skogsvårdslagen,
-- typiska arter,
-- signalarter / ForestrySignal,
+- statusy ochronne,
+- konwencje międzynarodowe,
+- dyrektywy UE,
+- fridlysning,
 - åtgärdsprogram,
-- IAS Union EU,
-- teksty opisowe z Artfakta / ArtDatabanken, jeśli są dostępne.
+- Skogsstyrelsens naturvårdsarter,
+- habitatdirektiv,
+- fågeldirektiv,
+- IAS / främmande arter,
+- riskklasy dla främmande arter,
+- opisy z Artfakta, jeśli są dostępne.
 
-Skrypt może pracować zarówno na eksporcie, który ma od razu poprawny nagłówek w pierwszym wierszu, jak i na oryginalnym eksporcie Artportalen, który zawiera na początku dodatkowe wiersze opisowe. Właściwy wiersz nagłówka jest wykrywany automatycznie.
+Skrypt automatycznie wykrywa właściwy wiersz nagłówka w eksporcie Artportalen. Oryginalny eksport może mieć na początku dodatkowe wiersze opisowe — nie trzeba ich usuwać ręcznie.
 
 ---
 
-## 2. Aktualna struktura repozytorium
+## 2. Struktura repozytorium
 
 ```text
 Artportalen_med_data/
@@ -56,7 +54,8 @@ Artportalen_med_data/
 │  │  ├─ README.md
 │  │  ├─ kungsbacka_standard.json
 │  │  ├─ hotade_arter.json
-│  │  └─ ias_union_eu.json
+│  │  ├─ ias_union_eu.json
+│  │  └─ frammande_invasiva.json
 │  └─ test_data/
 │
 ├─ prod/
@@ -77,32 +76,19 @@ Artportalen_med_data/
 
 ### `dev/`
 
-Folder developerski. Tutaj testujemy nowe funkcje, refaktoryzację i zmiany w logice eksportu.
+Folder developerski. Tutaj testujemy nowe funkcje.
 
 ### `prod/`
 
-Folder produkcyjny. Powinien zawierać stabilną wersję skryptu, która działa i może być używana operacyjnie.
+Folder produkcyjny. Powinien zawierać stabilną, sprawdzoną wersję.
 
 ### `dev/export_presets/` i `prod/export_presets/`
 
-Lokalny folder presetów dla danej wersji skryptu.
-
-Presety **nie są trzymane w root repozytorium**, tylko przy konkretnej wersji:
-
-```text
-dev/export_presets/
-prod/export_presets/
-```
-
-Dzięki temu DEV i PROD mogą mieć różne zestawy presetów bez mieszania konfiguracji.
+Foldery z presetami eksportu. Presety nie są trzymane w root repozytorium, tylko przy danej wersji skryptu.
 
 ### `secrets/`
 
-Lokalny folder z kluczami API. Ten folder **nie może trafić do GitHub**.
-
-### `Riskklassning2024.xlsx`
-
-Opcjonalny plik używany do merge z klasyfikacją ryzyka. Domyślnie skrypt szuka go najpierw w katalogu głównym repozytorium.
+Lokalny folder z kluczami API. Nie może być commitowany do GitHub.
 
 ---
 
@@ -114,7 +100,7 @@ Zalecane:
 Python 3.10+
 ```
 
-Pakiety Python:
+Pakiety:
 
 ```text
 pandas
@@ -122,31 +108,25 @@ requests
 openpyxl
 ```
 
-Instalacja pakietów:
+Instalacja:
 
 ```bash
 pip install pandas requests openpyxl
 ```
 
-Na Windows `tkinter` zwykle jest dostępny razem z Pythonem. Na Linuxie może wymagać osobnej instalacji.
-
 ---
 
 ## 4. Klucze API
 
-Klucze API nie są zapisane w kodzie. Skrypt czyta je z lokalnego folderu:
+Skrypt nie zawiera kluczy API w kodzie. Klucze są czytane z lokalnych plików tekstowych.
 
-```text
-/secrets
-```
-
-W katalogu głównym repozytorium utwórz folder:
+W root repozytorium utwórz folder:
 
 ```text
 secrets/
 ```
 
-Następnie dodaj trzy pliki tekstowe:
+W nim utwórz trzy pliki:
 
 ```text
 secrets/taxonomykey.txt
@@ -154,23 +134,21 @@ secrets/specieskey.txt
 secrets/listskey.txt
 ```
 
-Każdy plik powinien zawierać tylko sam token, bez cudzysłowów i bez komentarzy.
+Każdy plik powinien zawierać tylko sam token, bez cudzysłowów i komentarzy.
 
-Przykład zawartości pliku:
+Przykład:
 
 ```text
 TU_WKLEJ_TOKEN
 ```
 
-Jeśli `listskey.txt` używa tego samego tokenu co `specieskey.txt`, można wkleić ten sam token do obu plików.
+Jeśli `listskey.txt` korzysta z tego samego tokenu co `specieskey.txt`, można wkleić ten sam token do obu plików.
 
 ---
 
 ## 5. `.gitignore`
 
-Folder `secrets/` musi być ignorowany przez Git.
-
-Minimalny wpis:
+Minimalnie:
 
 ```gitignore
 /secrets/
@@ -201,76 +179,43 @@ results/
 tls_debug.csv
 *_with_data.xlsx
 *_bara_skyddade.xlsx
+*_frammande_invasiva.xlsx
 *_prioriterade_arter.xlsx
 *_full_.xlsx
 *_full_nodedupe.xlsx
 ```
 
-Przed commitem warto sprawdzić:
-
-```bash
-git status
-```
-
-Folder `secrets/` nie powinien być widoczny jako plik do dodania.
-
-Można też sprawdzić ignorowanie plików:
-
-```bash
-git check-ignore -v secrets/taxonomykey.txt secrets/specieskey.txt secrets/listskey.txt
-```
-
 ---
 
-## 6. Uruchamianie wersji DEV
+## 6. Uruchamianie
 
-Przejdź do folderu `dev`:
+### DEV
 
 ```bash
 cd dev
-```
-
-Uruchom:
-
-```bash
 python start.py
 ```
 
-Alternatywnie można uruchomić launcher kompatybilny:
+Alternatywnie:
 
 ```bash
 python AP_extra_uppgifter_DEV.py
 ```
 
-Preferowane jest jednak:
-
-```bash
-python start.py
-```
-
----
-
-## 7. Uruchamianie wersji PROD
-
-Przejdź do folderu `prod`:
+### PROD
 
 ```bash
 cd prod
-```
-
-Uruchom:
-
-```bash
 python start.py
 ```
 
-Jeśli w `prod/` utrzymywany jest także launcher kompatybilny, można ewentualnie uruchomić:
+Alternatywnie:
 
 ```bash
 python AP_extra_uppgifter.py
 ```
 
-Preferowane jest jednak:
+Preferowany launcher to zawsze:
 
 ```bash
 python start.py
@@ -278,9 +223,9 @@ python start.py
 
 ---
 
-## 8. Jak działa proces?
+## 7. Jak działa proces?
 
-Po uruchomieniu skryptu pojawia się proste UI, w którym użytkownik wybiera:
+Po uruchomieniu skryptu użytkownik wybiera w UI:
 
 1. plik wejściowy Excel,
 2. folder wyjściowy,
@@ -289,78 +234,238 @@ Po uruchomieniu skryptu pojawia się proste UI, w którym użytkownik wybiera:
 
 Następnie skrypt:
 
-1. wykrywa właściwy wiersz nagłówka w pliku Excel,
-2. czyta dane wejściowe,
-3. sprawdza, czy istnieje kolumna `TaxonId`,
-4. jeśli `TaxonId` brakuje, próbuje dopasować takson po nazwie szwedzkiej lub naukowej,
+1. wykrywa właściwy wiersz nagłówka,
+2. czyta plik Excel,
+3. sprawdza kolumnę `TaxonId`,
+4. jeśli `TaxonId` brakuje, próbuje dopasować takson po nazwie,
 5. tworzy listę unikalnych `TaxonId > 0`,
 6. odpytuje API tylko raz dla każdego unikalnego `TaxonId`,
-7. pobiera dane TLS i species data,
+7. pobiera dane z SpeciesDataService i TaxonListService,
 8. buduje tabelę z dodatkowymi kolumnami,
 9. scala dane z pełnym eksportem wejściowym,
 10. zapisuje pliki wynikowe,
-11. opcjonalnie wykonuje merge z `Riskklassning2024.xlsx`, jeśli plik istnieje.
+11. opcjonalnie wykonuje merge z `Riskklassning2024.xlsx`.
 
-Ważne: skrypt nie odpytuje API dla każdej obserwacji osobno. Jeśli jeden gatunek występuje wiele razy, dane ochronne są pobierane raz dla jego `TaxonId`, a potem scalane z pełną tabelą.
+Ważne: jeśli ten sam gatunek występuje w eksporcie wiele razy, API jest odpytywane tylko raz dla jego `TaxonId`.
 
 ---
 
-## 9. Pliki wynikowe
-
-Skrypt zapisuje pliki do wybranego folderu wynikowego.
+## 8. Pliki wynikowe
 
 ### `*_full_.xlsx`
 
-Pełna tabela wynikowa.
+Pełna tabela. Zawiera wszystkie obserwacje z pliku wejściowego oraz dopisane dane z API.
 
-Zawiera wszystkie obserwacje z pliku wejściowego oraz dopisane dane z API.
-
-Ten plik zachowuje powtórzenia obserwacji. Jeśli np. sikorka bogatka występuje w eksporcie 50 razy, w `*_full_.xlsx` nadal może wystąpić 50 razy, ale dane ochronne dla tego taksonu są pobrane tylko raz i zmergowane po `TaxonId`.
+Ten plik zachowuje powtórzenia obserwacji.
 
 ### `*_with_data.xlsx`
 
-Tabela przeglądowa z danymi dodatkowymi.
+Tabela przeglądowa z danymi dodatkowymi. Zasadniczo deduplikowana po `TaxonId`.
 
-Zasadniczo jest deduplikowana po `TaxonId`, więc jeden takson powinien występować raz.
-
-Kolumny w tym pliku zależą od wybranego presetu eksportu.
+Kolumny zależą od wybranego presetu.
 
 ### `*_bara_skyddade.xlsx`
 
-Tabela przefiltrowana do gatunków chronionych, priorytetowych lub istotnych przyrodniczo zgodnie z aktualnym filtrem.
+Tabela z taksonami chronionymi, priorytetowymi lub rödlistade od `NT` w górę.
 
-Obecnie filtr obejmuje także rödlistning od `NT` w górę.
+### `*_frammande_invasiva.xlsx`
 
-Kolumny w tym pliku zależą od wybranego presetu eksportu.
+Tabela z taksonami obcymi, inwazyjnymi lub znajdującymi się na listach ryzyka dla främmande arter.
 
 ### `*_log.txt`
 
-Log z przebiegu pracy.
-
-Zawiera informacje m.in. o:
-
-- pliku wejściowym,
-- folderze wyjściowym,
-- wybranym presecie,
-- wykrytym wierszu nagłówka,
-- liczbie rekordów,
-- liczbie unikalnych `TaxonId`,
-- liczbie pominiętych duplikatów przy zapytaniach API,
-- zapisanych plikach,
-- błędach API,
-- braku pliku `Riskklassning*.xlsx`, jeśli nie został znaleziony.
+Log przebiegu pracy.
 
 ### `tls_debug.csv`
 
-Plik debugowy dla TLS, zapisywany przy włączonym trybie DEBUG.
+Plik debugowy dla TLS, tworzony przy włączonym DEBUG.
 
 ---
 
-## 10. Filtr `_bara_skyddade`
+## 9. Najważniejsze źródła danych w skrypcie
 
-Plik `_bara_skyddade.xlsx` zawiera taksony, które spełniają przynajmniej jedno z kryteriów ochronnych lub priorytetowych.
+Skrypt korzysta głównie z trzech typów danych:
 
-### Aktualnie uwzględniane są m.in. kolumny:
+| Źródło | Do czego służy |
+|---|---|
+| TaxonService | Dopasowanie nazwy do `TaxonId`, jeśli `TaxonId` nie ma w pliku wejściowym. |
+| SpeciesDataService | Dane opisowe, rödlistning, naturvård, Artfakta, alien species risk assessment. |
+| TaxonListService | Członkostwo taksonów w listach: CITES, dyrektywy, konwencje, fridlysta arter, IAS, risklista itd. |
+
+W wielu kolumnach skrypt stosuje zasadę:
+
+```text
+najpierw TaxonListService, potem fallback z SpeciesDataService / natureConservation.lists
+```
+
+Dzięki temu flaga może zostać uzupełniona nawet wtedy, gdy jedna z metod nie zwróci informacji.
+
+---
+
+## 10. Kolumny dodawane przez skrypt z danych API SLU
+
+Poniżej znajduje się opis kolumn dodawanych przez skrypt. To są kolumny wzbogacające eksport z Artportalen.
+
+### 10.1. Podstawowe dane taksonomiczne
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `ScientificName` | Nazwa naukowa taksonu. |
+| `SwedishName` | Nazwa szwedzka, jeśli dostępna. |
+| `DisplayName` | Nazwa prezentacyjna używana przez API / Artfakta. |
+| `Category` | Kategoria taksonomiczna, np. art, släkte, familj. |
+
+---
+
+### 10.2. Czerwona lista
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `ConservationStatus` | Ogólny status naturvård / conservation status, jeśli API go zwraca. |
+| `RedListCategory` | Kategoria czerwonej listy, np. `RE`, `CR`, `EN`, `VU`, `NT`, `LC`, `DD`. |
+| `RedListCriterion` | Kryterium czerwonej listy, np. kryteria typu A, B, C itd. |
+| `RedListPeriodName` | Okres / edycja czerwonej listy użyta w danych. |
+| `RedListCriterionText` | Tekstowy opis kryterium czerwonej listy, jeśli jest dostępny. |
+
+Domyślnie do `_bara_skyddade.xlsx` trafiają taksony z kategorią:
+
+```text
+RE, CR, EN, VU, NT
+```
+
+Kategorie `LC`, `NA`, `NE`, `DD` i puste wartości nie trafiają do `_bara_skyddade` samą logiką rödlistning, chyba że takson ma inną flagę ochronną/prioriterad.
+
+---
+
+### 10.3. Åtgärdsprogram i naturvård
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `ActionProgramName` | Nazwa åtgärdsprogram, jeśli takson jest nim objęty. |
+| `ActionProgramStatus` | Status programu działań. |
+| `ActionProgramStart` | Rok startu programu działań. |
+| `ActionProgramEnd` | Rok zakończenia programu działań. |
+| `TypicalSpecies` | Typiska arter, jeśli takson jest wskazany jako typowy dla określonych siedlisk / naturtypów. |
+| `ForestrySignal` | Flaga signalarter / forestry board signal species, jeśli API ją zwraca. |
+| `ForestrySignalSpecies` | Nazwy powiązane z forestry signal species, jeśli są dostępne. |
+| `SkogsstyrelsensNaturvardsarter` | Członkostwo w liście Skogsstyrelsens naturvårdsarter. Lista przydatna dla kontekstu leśnego i naturvård. |
+| `LandscapeType` | Typy krajobrazu powiązane z taksonem. |
+| `Biotopes` | Biotopy powiązane z taksonem. |
+
+---
+
+### 10.4. Konwencje międzynarodowe
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `CITES` | Takson znajduje się na liście CITES. Dotyczy regulacji handlu gatunkami zagrożonymi. |
+| `Bernkonventionen` | Takson znajduje się na liście powiązanej z Konwencją Berneńską. |
+| `Bonnkonventionen` | Takson znajduje się na liście powiązanej z Konwencją Bońską / CMS. |
+
+---
+
+### 10.5. Fågeldirektivet
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `FågeldirektivetBilaga1` | Takson znajduje się w Fågeldirektivet Bilaga 1. |
+| `FågeldirektivetBilaga2` | Takson znajduje się w Fågeldirektivet Bilaga 2. |
+| `PrioriteradeFågelarterSkogsvårdslagen` | Ptak priorytetowy według Skogsvårdslagen / powiązanej listy. |
+| `ProtectedBirds` | Informacja z SpeciesDataService dotycząca chronionych ptaków, jeśli dostępna. |
+
+Uwaga techniczna: `FågeldirektivetBilaga2` jest osobną kolumną. Nie jest mieszana z `DirectiveAppendix2`, która dotyczy Habitatdirektivet Bilaga 2.
+
+---
+
+### 10.6. Fridlysning i przepisy ochronne
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `Fridlyst` | Takson jest oznaczony jako fridlyst. Flaga pochodzi z TLS, list naturvård albo tekstu `protectedText`. |
+| `Frid_text` | Tekst ochronny / protectedText z API, jeśli istnieje. |
+| `ProtectedByWorkProtectionConstitution` | Informacja z API o ochronie w przepisach związanych z Artskyddsförordningen / work protection constitution. |
+
+---
+
+### 10.7. Habitatdirektivet
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `DirectiveAppendix2` | Habitatdirektivet Bilaga 2. W tej wersji logika została zawężona, żeby nie mylić jej z Fågeldirektivet Bilaga 2. |
+| `DirectiveAppendix2Priority` | Habitatdirektivet Bilaga 2, gatunek priorytetowy. |
+| `DirectiveAppendix4` | Habitatdirektivet Bilaga 4. |
+| `DirectiveAppendix5` | Habitatdirektivet Bilaga 5. |
+| `Habitatdirektivet2023` | Członkostwo w nowszej liście Habitatdirektivet 2023, jeśli takson występuje w TLS. |
+| `Artikel 17 - 2019` | Informacje z raportowania Artikel 17 za okres 2019, jeśli dostępne w conservation assessments. |
+
+---
+
+### 10.8. Teksty Artfakta / opisy gatunku
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `Characteristic` | Opis cech charakterystycznych. |
+| `SpreadAndStatus` | Rozmieszczenie i status. |
+| `Ecology` | Informacje ekologiczne. |
+| `Threat` | Zagrożenia opisane w Artfakta. |
+| `ConservationMeasures` | Proponowane lub opisane działania ochronne. |
+| `Other` | Inne informacje tekstowe. |
+
+Te pola mogą być dłuższymi tekstami. Ich dostępność zależy od taksonu.
+
+---
+
+### 10.9. Obecność, pochodzenie i ekologia
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `SwedishPresence` | Informacja o obecności w Szwecji. |
+| `ImmigrationHistory` | Informacja o historii imigracji / pochodzeniu taksonu w Szwecji. |
+| `SubstrateInformation` | Informacje o substratach / podłożu, jeśli dostępne. |
+| `EcologicalGroups` | Grupy ekologiczne przypisane do taksonu. |
+| `ConservationEcology` | Dane/tekst z części conservation assessments dotyczący ekologii. |
+| `ConservationNatureConservation` | Dane/tekst z conservation assessments dotyczący naturvård. |
+| `ConservationTreeSpecies` | Dane/tekst z conservation assessments dotyczący drzew / tree species. |
+
+---
+
+### 10.10. Främmande arter, IAS i risklista
+
+| Kolumna | Wyjaśnienie |
+|---|---|
+| `FrammandeArter` | Takson znajduje się na liście främmande arter / alien species. |
+| `FrammandeArterISverige` | Takson znajduje się na liście främmande arter i Sverige. |
+| `IAS_Union_EU` | Takson znajduje się na unijnej liście IAS / Union list enligt EU-förordning 1143/2014. |
+| `RisklistaFrammandeArter` | Takson jest objęty risklista främmande arter. |
+| `Risklista_SE` | Risklista: `SE` — mycket hög risk. |
+| `Risklista_HI` | Risklista: `HI` — hög risk. |
+| `Risklista_PH` | Risklista: `PH` — potentiellt hög risk. |
+| `Risklista_LO` | Risklista: `LO` — låg risk. |
+| `Risklista_NK` | Risklista: `NK` — ingen känd risk. |
+| `AlienSpeciesRiskCategories` | Kategorie ryzyka z części `alienSpeciesRa`, jeśli API je zwraca. |
+| `AlienSpeciesEnvironments` | Środowiska powiązane z oceną alien species risk assessment. |
+| `AlienSpeciesEcologyEffect` | Efekty ekologiczne wskazane w ocenie alien species. |
+| `AlienSpeciesTaxonLists` | Listy taksonomiczne powiązane z alien species risk assessment. |
+| `AlienSpeciesInvationPotentials` | Potencjał inwazyjny z API. Nazwa zachowuje pisownię zgodną z polem w aktualnym kodzie/API. |
+| `AlienSpeciesRegions` | Regiony powiązane z oceną alien species. |
+
+Te kolumny są używane do tworzenia pliku:
+
+```text
+*_frammande_invasiva.xlsx
+```
+
+---
+
+## 11. Filtr `_bara_skyddade.xlsx`
+
+Do `_bara_skyddade.xlsx` trafia takson, jeśli spełnia przynajmniej jedno z kryteriów:
+
+1. ma aktywną jedną z kolumn ochronnych/przyrodniczych,
+2. ma kategorię czerwonej listy `RE`, `CR`, `EN`, `VU` albo `NT`,
+3. wybrany preset dodatkowo włącza inne kryteria, np. IAS.
+
+Domyślne kolumny ochronne/przyrodnicze:
 
 ```text
 ConservationStatus
@@ -371,12 +476,14 @@ Bernkonventionen
 Bonnkonventionen
 PrioriteradeFågelarterSkogsvårdslagen
 FågeldirektivetBilaga1
+SkogsstyrelsensNaturvardsarter
 ProtectedByWorkProtectionConstitution
 ProtectedBirds
 DirectiveAppendix2
 DirectiveAppendix2Priority
 DirectiveAppendix4
 DirectiveAppendix5
+Habitatdirektivet2023
 ForestrySignal
 ActionProgramStatus
 ActionProgramStart
@@ -385,60 +492,47 @@ ActionProgramName
 Fridlyst
 ```
 
-Jeśli którakolwiek z tych kolumn zawiera wartość, takson trafia do `_bara_skyddade.xlsx`.
-
-### Rödlistning
-
-Dodatkowo do `_bara_skyddade.xlsx` trafiają taksony z kategorią czerwonej listy:
+Domyślne kategorie rödlistning:
 
 ```text
-RE
-CR
-EN
-VU
-NT
+RE, CR, EN, VU, NT
 ```
-
-Czyli od `NT` w górę.
-
-Kategorie niewłączane samą rödlistning-logiką:
-
-```text
-LC
-NA
-NE
-DD
-puste
-```
-
-Uwaga: `DD` można w przyszłości dodać jako opcję, jeśli będzie potrzebna logika „kunskapsbrist też do kontroli”. Aktualnie nie jest częścią domyślnego filtra redlist.
-
-### IAS Union EU
-
-`IAS_Union_EU` jest dostępne jako osobna kolumna.
-
-Domyślnie nie jest traktowane jako formalny filtr `bara_skyddade`, chyba że wybrany preset ma włączony filtr IAS.
 
 ---
 
-## 11. Presety eksportu
+## 12. Filtr `_frammande_invasiva.xlsx`
 
-Wersja DEV obsługuje presety eksportu.
+Do `_frammande_invasiva.xlsx` trafia takson, jeśli spełnia przynajmniej jedno z kryteriów związanych z främmande arter / IAS / risklista.
 
-Presety służą do wyboru zestawu kolumn w plikach:
+Kolumny używane w filtrze:
 
 ```text
-*_with_data.xlsx
-*_bara_skyddade.xlsx
+FrammandeArter
+FrammandeArterISverige
+IAS_Union_EU
+RisklistaFrammandeArter
+Risklista_SE
+Risklista_HI
+Risklista_PH
+Risklista_LO
+Risklista_NK
+AlienSpeciesRiskCategories
+AlienSpeciesEnvironments
+AlienSpeciesEcologyEffect
+AlienSpeciesTaxonLists
+AlienSpeciesInvationPotentials
+AlienSpeciesRegions
 ```
 
-Mogą również sterować dodatkowymi ustawieniami filtra `_bara_skyddade`, np. tym, czy do filtra ma być włączona rödlistning albo IAS.
+Ten plik jest oddzielony od `_bara_skyddade.xlsx`, bo gatunek obcy/inwazyjny nie jest tym samym co gatunek chroniony.
 
-Presety nie zmieniają sposobu pobierania danych z API. Zmieniają głównie to, które kolumny są pokazane w wynikowych plikach przeglądowych oraz jakie dodatkowe kryteria filtracji są aktywne.
+---
 
-### Lokalizacja presetów
+## 13. Presety eksportu
 
-Presety są trzymane lokalnie przy konkretnej wersji skryptu:
+Presety sterują tym, które kolumny są widoczne w plikach przeglądowych oraz jakie filtry są aktywne.
+
+Presety są trzymane lokalnie w folderze konkretnej wersji:
 
 ```text
 dev/export_presets/
@@ -447,103 +541,103 @@ prod/export_presets/
 
 Nie są trzymane w root repozytorium.
 
-Dzięki temu DEV i PROD mogą mieć różne zestawy presetów.
-
-### Presety wbudowane i JSON
-
-Skrypt ma presety wbudowane w kodzie jako fallback.
-
-Dodatkowo czyta pliki `.json` z folderu:
+### Przykładowe presety
 
 ```text
-export_presets/
+kungsbacka_standard.json
+hotade_arter.json
+ias_union_eu.json
+frammande_invasiva.json
 ```
-
-czyli dla DEV:
-
-```text
-dev/export_presets/
-```
-
-oraz dla PROD:
-
-```text
-prod/export_presets/
-```
-
-Presety z plików JSON są widoczne w UI i mogą być oznaczone jako presety zewnętrzne.
 
 ### Podgląd presetu
 
-W UI można podejrzeć wybrany preset przed uruchomieniem skryptu.
+UI pozwala podejrzeć preset przed startem.
 
-Podgląd powinien pokazać m.in.:
+Podgląd pokazuje m.in.:
 
-```text
-nazwa presetu
-opis
-liczba kolumn
-lista kolumn
-czy aktywny jest filtr ochronny
-czy aktywna jest rödlistning
-jakie kategorie rödlistning są włączone
-czy aktywny jest filtr IAS
-```
+- nazwę,
+- opis,
+- liczbę kolumn,
+- listę kolumn,
+- aktywne filtry,
+- kategorie rödlistning,
+- filtr IAS.
 
-### Zapis kopii presetu jako JSON
+### Edycja presetu
 
-UI pozwala zapisać kopię aktualnie wybranego presetu jako plik JSON.
+UI zawiera prosty edytor presetów. Można przez niego:
 
-Dla DEV kopia zapisuje się do:
+- zmienić nazwę,
+- zmienić opis,
+- wybrać kolumny checkboxami,
+- włączyć/wyłączyć filtr ochronny,
+- włączyć/wyłączyć rödlistning,
+- wybrać kategorie rödlistning,
+- włączyć/wyłączyć filtr IAS,
+- zapisać nowy preset jako JSON.
+
+Edycja zapisuje nowy plik JSON w:
 
 ```text
 dev/export_presets/
 ```
 
-Dla PROD kopia zapisuje się do:
+albo w wersji produkcyjnej:
 
 ```text
 prod/export_presets/
 ```
 
-To pozwala szybko utworzyć własny preset na bazie istniejącego.
+---
 
-### Przykładowy preset JSON
+## 14. Przykład presetu JSON
 
 ```json
 {
-  "id": "kungsbacka_standard",
-  "name": "Kungsbacka standard",
-  "description": "Standardexport med originalkolumner och viktigaste naturvårdsfält.",
+  "id": "frammande_invasiva",
+  "name": "Främmande / invasiva arter",
+  "description": "Preset för främmande arter, IAS och risklista.",
+  "include_all_columns": false,
+  "include_original_columns": true,
   "columns": [
     "TaxonId",
     "taxon_svensktNamn",
     "taxon_vetenskapligtNamn",
+    "ScientificName",
+    "SwedishName",
     "RedListCategory",
-    "Fridlyst",
-    "CITES",
-    "Bernkonventionen",
-    "FågeldirektivetBilaga1",
-    "DirectiveAppendix2",
-    "DirectiveAppendix4",
-    "IAS_Union_EU"
+    "FrammandeArter",
+    "FrammandeArterISverige",
+    "IAS_Union_EU",
+    "RisklistaFrammandeArter",
+    "Risklista_SE",
+    "Risklista_HI",
+    "Risklista_PH",
+    "Risklista_LO",
+    "Risklista_NK",
+    "AlienSpeciesRiskCategories",
+    "AlienSpeciesEnvironments",
+    "AlienSpeciesEcologyEffect",
+    "AlienSpeciesInvationPotentials",
+    "AlienSpeciesRegions"
   ],
   "filter": {
-    "include_current_protection_filter": true,
-    "include_redlist_filter": true,
-    "redlist_categories": ["RE", "CR", "EN", "VU", "NT"],
-    "include_ias_union_eu_filter": false
+    "include_current_protection_filter": false,
+    "include_redlist_filter": false,
+    "redlist_categories": [],
+    "include_ias_union_eu_filter": true
   }
 }
 ```
 
 ---
 
-## 12. Auto-wykrywanie nagłówka w eksporcie Artportalen
+## 15. Auto-wykrywanie nagłówka Artportalen
 
-Oryginalny eksport z Artportalen może zawierać na początku dodatkowe wiersze opisowe. Często są to dwa pierwsze wiersze.
+Oryginalny eksport Artportalen może mieć dodatkowe wiersze opisowe przed właściwym nagłówkiem tabeli.
 
-Skrypt nie wymaga ręcznego kasowania tych wierszy. Zamiast tego skanuje początkowe wiersze i szuka właściwego nagłówka po nazwach kolumn takich jak:
+Skrypt szuka w pierwszych wierszach nazw kolumn takich jak:
 
 ```text
 TaxonId
@@ -553,7 +647,7 @@ taxon_vetenskapligtNamn
 
 Jeśli nagłówek zostanie wykryty np. w trzecim wierszu, skrypt automatycznie czyta dane od tego miejsca.
 
-W logu pojawi się informacja w stylu:
+W logu pojawi się np.:
 
 ```text
 Wykryto dodatkowe wiersze przed nagłówkiem: 2. Czytam dane od wiersza 3.
@@ -561,7 +655,7 @@ Wykryto dodatkowe wiersze przed nagłówkiem: 2. Czytam dane od wiersza 3.
 
 ---
 
-## 13. Riskklassning
+## 16. Riskklassning
 
 Skrypt może wykonać merge z plikiem:
 
@@ -575,20 +669,20 @@ albo innym plikiem pasującym do wzorca:
 Riskklassning*.xlsx
 ```
 
-Domyślna kolejność wyszukiwania:
+Kolejność wyszukiwania:
 
 1. root repozytorium,
 2. folder pliku wejściowego,
 3. folder wynikowy,
 4. folder skryptu.
 
-Zalecane miejsce przechowywania:
+Zalecane miejsce:
 
 ```text
 Artportalen_med_data/Riskklassning2024.xlsx
 ```
 
-Jeśli plik nie zostanie znaleziony, skrypt kontynuuje pracę i zapisuje w logu informację:
+Jeśli plik nie zostanie znaleziony, skrypt kontynuuje pracę i zapisuje w logu:
 
 ```text
 Riskklassning*.xlsx nie znaleziony — pomijam merge.
@@ -596,11 +690,11 @@ Riskklassning*.xlsx nie znaleziony — pomijam merge.
 
 ---
 
-## 14. Ważne założenia techniczne
+## 17. Ważne założenia techniczne
 
 ### API tylko dla unikalnych `TaxonId`
 
-Skrypt zachowuje wszystkie obserwacje w pliku `*_full_.xlsx`, ale nie wykonuje zapytań API dla każdego powtórzonego rekordu.
+Skrypt zachowuje wszystkie obserwacje w `*_full_.xlsx`, ale nie odpytuje API dla każdego powtórzonego rekordu.
 
 Przykład:
 
@@ -610,75 +704,62 @@ Unikalne TaxonId: 240
 Zapytania API: około 240, nie 1200
 ```
 
-Dzięki temu skrypt działa szybciej i nie wysyła niepotrzebnych zapytań.
-
 ### `TaxonId` jest głównym kluczem
 
-Najlepiej, jeśli plik wejściowy zawiera kolumnę:
+Najlepiej, jeśli eksport Artportalen zawiera kolumnę:
 
 ```text
 TaxonId
 ```
 
-Jeśli jej brakuje, skrypt próbuje znaleźć `TaxonId` po nazwie szwedzkiej lub naukowej. Ten tryb jest wolniejszy i mniej pewny niż bezpośrednie użycie `TaxonId`.
+Jeśli jej brakuje, skrypt próbuje znaleźć `TaxonId` po nazwie szwedzkiej lub naukowej. Ten tryb jest wolniejszy i mniej pewny.
 
-### Czyszczenie wartości pustych
-
-Wyniki typu:
+### `full_` zachowuje obserwacje
 
 ```text
-Nej
-False
-false
-None
-NaN
+*_full_.xlsx
 ```
 
-mogą być czyszczone do pustych wartości w wybranych kolumnach, żeby eksport był czytelniejszy.
+zachowuje wszystkie obserwacje z wejścia.
+
+```text
+*_with_data.xlsx
+```
+
+jest przeglądem deduplikowanym po `TaxonId`.
 
 ---
 
-## 15. Tryb DEBUG
+## 18. Tryb DEBUG
 
-Tryb DEBUG służy do testowania i kontroli działania TLS oraz pobierania danych.
-
-Może generować dodatkowe logi i plik:
+Tryb DEBUG dodaje więcej informacji diagnostycznych i może zapisać:
 
 ```text
 tls_debug.csv
 ```
 
-Na potrzeby normalnej pracy tryb DEBUG może być wyłączony.
+Przy normalnym użyciu DEBUG może być wyłączony.
 
 ---
 
-## 16. Zalecany workflow pracy z repo
+## 19. Zalecany workflow
 
-### Normalne użycie
-
-1. Używaj wersji z `prod/`.
-2. Wybierz eksport Excel z Artportalen.
-3. Wybierz folder wynikowy.
-4. Wybierz preset eksportu.
-5. Sprawdź wynikowe pliki Excel.
-
-### Rozwój i testy
+### Rozwój
 
 1. Zmieniaj tylko `dev/`.
-2. Testuj na plikach z `dev/test_data/` albo lokalnych danych testowych.
+2. Testuj na danych testowych.
 3. Sprawdź log.
-4. Porównaj wynik z wersją produkcyjną.
-5. Dopiero po testach przenieś zmiany do `prod/`.
+4. Sprawdź pliki wynikowe.
+5. Po testach przenieś do `prod/`.
 
-### Praca z presetami
+### Presety
 
-1. Presety testowe dodawaj najpierw w `dev/export_presets/`.
-2. Po sprawdzeniu możesz przenieść je do `prod/export_presets/`.
+1. Presety testowe dodawaj w `dev/export_presets/`.
+2. Po sprawdzeniu przenieś do `prod/export_presets/`.
 3. Nie trzymaj presetów w root repozytorium.
-4. Jeśli preset zawiera tylko konfigurację kolumn i filtrów, może być commitowany.
-5. Nie zapisuj w presetach tokenów, ścieżek prywatnych ani danych wrażliwych.
+4. Nie zapisuj w presetach tokenów, ścieżek prywatnych ani danych wrażliwych.
 
-### Zasada bezpieczeństwa
+### Bezpieczeństwo
 
 Nie commitować:
 
@@ -692,63 +773,43 @@ plików tymczasowych
 
 ---
 
-## 17. Planowane / możliwe ulepszenia
+## 20. Szybka diagnoza problemów
 
-Potencjalne następne kroki:
+### Brak pliku z kluczem
 
-- osobne presety dla `with_data`, `bara_skyddade` i `full`,
-- opcjonalne włączanie `DD` do filtra priorytetowego,
-- opcjonalne generowanie osobnego pliku dla `IAS_Union_EU`,
-- prostszy raport HTML z podsumowaniem liczby gatunków w kategoriach `RE/CR/EN/VU/NT/LC`,
-- kontrola jakości wejścia przed startem,
-- wykrywanie podejrzanych braków `TaxonId`,
-- możliwość uruchomienia bez GUI z argumentami CLI,
-- testy jednostkowe dla parserów API i filtrów,
-- automatyczny test na plikach z `dev/test_data/`.
-
----
-
-## 18. Szybka diagnoza problemów
-
-### Skrypt nie startuje i zgłasza brak pliku z kluczem
-
-Sprawdź, czy istnieje folder:
+Sprawdź:
 
 ```text
-secrets/
+secrets/taxonomykey.txt
+secrets/specieskey.txt
+secrets/listskey.txt
 ```
 
-oraz pliki:
+Folder `secrets/` powinien być w root repozytorium.
+
+### Program wygląda, jakby się zawiesił po wyborze folderu
+
+Sprawdź, czy okno wyboru presetu nie znajduje się za innym oknem. Aktualna wersja UI próbuje wymusić pokazanie okna na wierzchu.
+
+### Nie widzę swojego presetu
+
+Sprawdź, czy JSON jest w odpowiednim folderze:
 
 ```text
-taxonomykey.txt
-specieskey.txt
-listskey.txt
+dev/export_presets/
 ```
 
-Folder `secrets/` powinien być w root repozytorium, nie w `dev/` ani `prod/`.
-
-### Po wyborze folderu wygląda, jakby program się zawiesił
-
-Sprawdź, czy nie otworzyło się okno wyboru presetu za innym oknem.
-
-Aktualna wersja UI powinna wymuszać pokazanie okna na wierzchu, ale w razie problemów warto sprawdzić pasek zadań albo `Alt+Tab`.
-
-### Skrypt czyta zły nagłówek Excela
-
-Sprawdź log. Powinna być informacja o wykrytym wierszu nagłówka.
-
-Jeśli wykrywanie się myli, warto sprawdzić, czy w pliku wejściowym istnieją kolumny typu:
+albo:
 
 ```text
-TaxonId
-taxon_svensktNamn
-taxon_vetenskapligtNamn
+prod/export_presets/
 ```
+
+Sprawdź też poprawność składni JSON.
 
 ### Wynik ma więcej wierszy niż oczekiwano
 
-Sprawdź, który plik oglądasz.
+Sprawdź, który plik oglądasz:
 
 ```text
 *_full_.xlsx
@@ -760,35 +821,11 @@ zachowuje wszystkie obserwacje.
 *_with_data.xlsx
 ```
 
-jest tabelą przeglądową deduplikowaną po `TaxonId`.
-
-### API działa wolno
-
-Sprawdź log i liczbę unikalnych `TaxonId`.
-
-Jeśli wejście ma bardzo wiele unikalnych taksonów, czas działania będzie dłuższy. Powtórzone obserwacje tego samego taksonu nie powinny jednak zwiększać liczby zapytań API.
-
-### Nie widzę swojego presetu w UI
-
-Sprawdź, czy plik `.json` znajduje się w odpowiednim folderze:
-
-```text
-dev/export_presets/
-```
-
-albo, dla wersji produkcyjnej:
-
-```text
-prod/export_presets/
-```
-
-Sprawdź też, czy JSON jest poprawny składniowo.
+jest przeglądem po `TaxonId`.
 
 ---
 
-## 19. Status projektu
-
-Projekt działa, ale nadal jest rozwijany.
+## 21. Status projektu
 
 Aktualny stan:
 
@@ -796,34 +833,39 @@ Aktualny stan:
 ✅ działa na eksporcie Artportalen
 ✅ czyta tokeny z lokalnego /secrets
 ✅ ma strukturę dev/prod
-✅ ma modularną wersję developerską
+✅ ma modularną strukturę kodu
 ✅ automatycznie wykrywa nagłówek eksportu
 ✅ ogranicza zapytania API do unikalnych TaxonId
 ✅ zachowuje pełne obserwacje w full export
-✅ filtruje skyddade/prioriterade z uwzględnieniem RedListCategory od NT w górę
-✅ obsługuje presety eksportu
+✅ filtruje skyddade/prioriterade z RedListCategory od NT w górę
+✅ obsługuje SkogsstyrelsensNaturvardsarter
+✅ obsługuje FågeldirektivetBilaga2 jako osobną kolumnę
+✅ poprawia rozdzielenie Habitatdirektivet Bilaga 2 od Fågeldirektivet Bilaga 2
+✅ obsługuje Habitatdirektivet2023
+✅ obsługuje främmande arter, IAS i risklista SE/HI/PH/LO/NK
+✅ generuje osobny plik _frammande_invasiva.xlsx
 ✅ obsługuje presety JSON w dev/export_presets/ i prod/export_presets/
-✅ pozwala podejrzeć preset przed uruchomieniem
-✅ pozwala zapisać kopię presetu jako JSON
-⚠️ wymaga dalszych testów na różnych eksportach
+✅ pozwala podejrzeć preset
+✅ pozwala edytować i zapisać preset jako JSON
+⚠️ wymaga dalszych testów na różnych eksportach Artportalen
 ⚠️ wymaga ostrożności przy przenoszeniu zmian z dev do prod
 ```
 
 ---
 
-## 20. Krótkie TL;DR
+## 22. TL;DR
 
 ```text
 1. Tokeny trzymaj lokalnie w /secrets.
-2. Uruchamiaj DEV przez: python start.py.
-3. Presety DEV trzymaj w dev/export_presets/.
-4. Presety PROD trzymaj w prod/export_presets/.
-5. Wybierz Excel z Artportalen i folder wynikowy.
-6. Wybierz preset eksportu.
-7. Skrypt sam wykryje nagłówek i pobierze dane po unikalnych TaxonId.
-8. full_ zachowuje wszystkie obserwacje.
-9. with_data jest przeglądem po TaxonId.
-10. bara_skyddade zawiera gatunki chronione / priorytetowe oraz rödlistade od NT w górę.
+2. Uruchamiaj przez python start.py.
+3. DEV rozwijaj w dev/.
+4. PROD trzymaj stabilny w prod/.
+5. Presety DEV trzymaj w dev/export_presets/.
+6. Presety PROD trzymaj w prod/export_presets/.
+7. full_ zachowuje wszystkie obserwacje.
+8. with_data jest przeglądem po TaxonId.
+9. bara_skyddade zawiera ochronne/prioriterade + RedListCategory RE/CR/EN/VU/NT.
+10. frammande_invasiva zawiera främmande arter, IAS i risklista SE/HI/PH/LO/NK.
 11. Riskklassning2024.xlsx trzymaj najlepiej w root repo.
-12. secrets/ i results/ nie powinny trafiać do GitHub.
+12. secrets/ i results/ nie commitować.
 ```
