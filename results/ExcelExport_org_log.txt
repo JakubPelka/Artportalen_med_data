@@ -374,3 +374,76 @@
 [2026-05-12 12:03:59] — 271/1340 — TaxonId=102125
 [2026-05-12 12:04:00] — 272/1340 — TaxonId=102207
 [2026-05-12 12:04:00] — 273/1340 — TaxonId=102342
+[2026-05-12 12:04:00] — 274/1340 — TaxonId=102366
+[2026-05-12 12:04:01] — 275/1340 — TaxonId=102606
+[2026-05-12 12:04:01] — 276/1340 — TaxonId=102610
+[2026-05-12 12:04:01] — 277/1340 — TaxonId=102611
+[2026-05-12 12:04:02] — 278/1340 — TaxonId=102618
+[2026-05-12 12:04:02] — 279/1340 — TaxonId=102621
+[2026-05-12 12:04:03] — 280/1340 — TaxonId=102623
+[2026-05-12 12:04:03] → 280/1340 taksonów ukończono
+[2026-05-12 12:04:03] — 281/1340 — TaxonId=102626
+[2026-05-12 12:04:03] — 282/1340 — TaxonId=102668
+[2026-05-12 12:04:04] — 283/1340 — TaxonId=102921
+[2026-05-12 12:04:04] — 284/1340 — TaxonId=102927
+[2026-05-12 12:04:04] — 285/1340 — TaxonId=102928
+[2026-05-12 12:04:05] — 286/1340 — TaxonId=102929
+[2026-05-12 12:04:05] — 287/1340 — TaxonId=102932
+[2026-05-12 12:04:05] — 288/1340 — TaxonId=102933
+[2026-05-12 12:04:06] — 289/1340 — TaxonId=102934
+[2026-05-12 12:04:06] — 290/1340 — TaxonId=102937
+[2026-05-12 12:04:06] → 290/1340 taksonów ukończono
+[2026-05-12 12:04:07] — 291/1340 — TaxonId=102940
+[2026-05-12 12:04:07] — 292/1340 — TaxonId=102941
+[2026-05-12 12:04:07] — 293/1340 — TaxonId=102942
+[2026-05-12 12:04:08] — 294/1340 — TaxonId=102943
+[2026-05-12 12:04:08] — 295/1340 — TaxonId=102946
+[2026-05-12 12:04:08] — 296/1340 — TaxonId=102948
+[2026-05-12 12:04:09] — 297/1340 — TaxonId=102950
+[2026-05-12 12:04:09] — 298/1340 — TaxonId=102952
+[2026-05-12 12:04:09] — 299/1340 — TaxonId=102955
+[2026-05-12 12:04:10] — 300/1340 — TaxonId=102960
+[2026-05-12 12:04:10] → 300/1340 taksonów ukończono
+[2026-05-12 12:04:10] — 301/1340 — TaxonId=102961
+[2026-05-12 12:04:10] — 302/1340 — TaxonId=102963
+[2026-05-12 12:04:11] — 303/1340 — TaxonId=102964
+[2026-05-12 12:04:11] — 304/1340 — TaxonId=102966
+[2026-05-12 12:04:12] — 305/1340 — TaxonId=102967
+[2026-05-12 12:04:12] — 306/1340 — TaxonId=102970
+[2026-05-12 12:04:12] — 307/1340 — TaxonId=102971
+[2026-05-12 12:04:13] — 308/1340 — TaxonId=102973
+[2026-05-12 12:04:13] — 309/1340 — TaxonId=102974
+[2026-05-12 12:04:13] — 310/1340 — TaxonId=102975
+[2026-05-12 12:04:14] → 310/1340 taksonów ukończono
+[2026-05-12 12:04:14] — 311/1340 — TaxonId=102976
+[2026-05-12 12:04:14] — 312/1340 — TaxonId=102977
+[2026-05-12 12:04:15] — 313/1340 — TaxonId=102978
+[2026-05-12 12:04:15] — 314/1340 — TaxonId=102979
+[2026-05-12 12:04:16] — 315/1340 — TaxonId=102980
+[2026-05-12 12:04:16] — 316/1340 — TaxonId=102981
+[2026-05-12 12:04:16] — 317/1340 — TaxonId=102982
+[2026-05-12 12:04:17] — 318/1340 — TaxonId=102983
+[2026-05-12 12:04:17] — 319/1340 — TaxonId=102986
+[2026-05-12 12:04:17] — 320/1340 — TaxonId=102987
+[2026-05-12 12:04:18] → 320/1340 taksonów ukończono
+[2026-05-12 12:04:18] — 321/1340 — TaxonId=102988
+[2026-05-12 12:04:18] — 322/1340 — TaxonId=102989
+[2026-05-12 12:04:18] — 323/1340 — TaxonId=102990
+[2026-05-12 12:04:19] — 324/1340 — TaxonId=102991
+[2026-05-12 12:04:19] — 325/1340 — TaxonId=102992
+[2026-05-13 07:31:50] Błąd dla TaxonId 102992: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[2026-05-13 07:31:50] — 326/1340 — TaxonId=102993
+[2026-05-13 07:31:51] Błąd dla TaxonId 102993: HTTPSConnectionPool(host='api.artdatabanken.se', port=443): Max retries exceeded with url: /information/v1/speciesdataservice/v1/speciesdata?taxa=102993&culture=sv-SE (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000002A829A2C1D0>: Failed to resolve 'api.artdatabanken.se' ([Errno 11001] getaddrinfo failed)"))
+[2026-05-13 07:31:51] — 327/1340 — TaxonId=102994
+[2026-05-13 07:31:51] Błąd dla TaxonId 102994: HTTPSConnectionPool(host='api.artdatabanken.se', port=443): Max retries exceeded with url: /information/v1/speciesdataservice/v1/speciesdata?taxa=102994&culture=sv-SE (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000002A829A2F920>: Failed to resolve 'api.artdatabanken.se' ([Errno 11001] getaddrinfo failed)"))
+[2026-05-13 07:31:51] — 328/1340 — TaxonId=102997
+[2026-05-13 07:31:52] Błąd dla TaxonId 102997: HTTPSConnectionPool(host='api.artdatabanken.se', port=443): Max retries exceeded with url: /information/v1/speciesdataservice/v1/speciesdata?taxa=102997&culture=sv-SE (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000002A829A2F050>: Failed to resolve 'api.artdatabanken.se' ([Errno 11001] getaddrinfo failed)"))
+[2026-05-13 07:31:52] — 329/1340 — TaxonId=102998
+[2026-05-13 07:31:52] Błąd dla TaxonId 102998: HTTPSConnectionPool(host='api.artdatabanken.se', port=443): Max retries exceeded with url: /information/v1/speciesdataservice/v1/speciesdata?taxa=102998&culture=sv-SE (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000002A829A2E6C0>: Failed to resolve 'api.artdatabanken.se' ([Errno 11001] getaddrinfo failed)"))
+[2026-05-13 07:31:52] — 330/1340 — TaxonId=102999
+[2026-05-13 07:31:53] Błąd dla TaxonId 102999: HTTPSConnectionPool(host='api.artdatabanken.se', port=443): Max retries exceeded with url: /information/v1/speciesdataservice/v1/speciesdata?taxa=102999&culture=sv-SE (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000002A82682D5E0>: Failed to resolve 'api.artdatabanken.se' ([Errno 11001] getaddrinfo failed)"))
+[2026-05-13 07:31:53] — 331/1340 — TaxonId=103000
+[2026-05-13 07:31:53] Błąd dla TaxonId 103000: HTTPSConnectionPool(host='api.artdatabanken.se', port=443): Max retries exceeded with url: /information/v1/speciesdataservice/v1/speciesdata?taxa=103000&culture=sv-SE (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000002A829A2EDE0>: Failed to resolve 'api.artdatabanken.se' ([Errno 11001] getaddrinfo failed)"))
+[2026-05-13 07:31:53] — 332/1340 — TaxonId=103001
+[2026-05-13 07:32:15] Błąd dla TaxonId 103001: HTTPSConnectionPool(host='api.artdatabanken.se', port=443): Max retries exceeded with url: /information/v1/speciesdataservice/v1/speciesdata?taxa=103001&culture=sv-SE (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x000002A829A2F320>, 'Connection to api.artdatabanken.se timed out. (connect timeout=30)'))
+[2026-05-13 07:32:15] — 333/1340 — TaxonId=103002
