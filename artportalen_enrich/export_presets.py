@@ -17,20 +17,18 @@ Det betyder att DEV och PROD kan ha egna presetmappar:
 Om mappen saknas används de inbyggda profilerna.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import pandas as pd
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_DIR = os.path.dirname(PACKAGE_DIR)  # .../dev eller .../prod
-EXTERNAL_PRESETS_DIR = os.path.join(SCRIPT_DIR, "export_presets")
+REPO_ROOT = os.path.dirname(PACKAGE_DIR)
+EXTERNAL_PRESETS_DIR = os.path.join(REPO_ROOT, "export_presets")
 
 
 @dataclass(frozen=True)
@@ -40,13 +38,13 @@ class ExportPreset:
     description: str
     include_all_columns: bool = False
     include_original_columns: bool = False
-    original_column_candidates: tuple[str, ...] = ()
-    enrichment_columns: tuple[str, ...] = ()
+    original_column_candidates: Tuple[str, ...] = ()
+    enrichment_columns: Tuple[str, ...] = ()
 
     # Filter för *_bara_skyddade.xlsx / prioriterade arter.
     include_current_protection_filter: bool = True
     include_redlist_filter: bool = True
-    redlist_categories: tuple[str, ...] = ("RE", "CR", "EN", "VU", "NT")
+    redlist_categories: Tuple[str, ...] = ("RE", "CR", "EN", "VU", "NT")
     include_ias_union_eu_filter: bool = False
 
     # Metadata för felsökning/preview.
@@ -90,6 +88,7 @@ IDENTIFICATION_COLUMNS = (
     "ScientificName",
     "SwedishName",
     "DisplayName",
+    "Author",
     "Category",
 )
 
@@ -141,6 +140,8 @@ NATURE_TEXT_COLUMNS = (
     "Other",
     "SwedishPresence",
     "ImmigrationHistory",
+    "SwedishOccurrence",
+    "SwedishHistory",
     "SubstrateInformation",
     "EcologicalGroups",
     "ConservationEcology",
@@ -270,7 +271,7 @@ def get_default_preset_id() -> str:
     return DEFAULT_PRESET_ID
 
 
-def _as_tuple(value: Any) -> tuple[str, ...]:
+def _as_tuple(value: Any) -> Tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, tuple):
@@ -282,7 +283,7 @@ def _as_tuple(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _bool_value(data: dict[str, Any], key: str, default: bool) -> bool:
+def _bool_value(data: Dict[str, Any], key: str, default: bool) -> bool:
     val = data.get(key, default)
     if isinstance(val, bool):
         return val
@@ -291,7 +292,7 @@ def _bool_value(data: dict[str, Any], key: str, default: bool) -> bool:
     return bool(val)
 
 
-def _preset_from_dict(data: dict[str, Any], *, source: str, source_path: str = "") -> ExportPreset:
+def _preset_from_dict(data: Dict[str, Any], *, source: str, source_path: str = "") -> ExportPreset:
     preset_id = str(data.get("preset_id") or data.get("id") or "").strip()
     label = str(data.get("label") or data.get("name") or preset_id).strip()
     description = str(data.get("description") or "").strip()
@@ -332,28 +333,33 @@ def _preset_from_dict(data: dict[str, Any], *, source: str, source_path: str = "
     )
 
 
-def _load_external_presets() -> dict[str, ExportPreset]:
-    presets: dict[str, ExportPreset] = {}
-    if not os.path.isdir(EXTERNAL_PRESETS_DIR):
-        return presets
-
-    for filename in sorted(os.listdir(EXTERNAL_PRESETS_DIR)):
-        if not filename.lower().endswith(".json"):
+def _load_external_presets() -> Dict[str, ExportPreset]:
+    presets: Dict[str, ExportPreset] = {}
+    candidate_dirs = [
+        os.path.join(REPO_ROOT, "export_presets"),
+        os.path.join(REPO_ROOT, "dev", "export_presets"),
+        os.path.join(REPO_ROOT, "prod", "export_presets"),
+    ]
+    for pdir in candidate_dirs:
+        if not os.path.isdir(pdir):
             continue
-        path = os.path.join(EXTERNAL_PRESETS_DIR, filename)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError("Preset JSON måste vara ett objekt.")
-            preset = _preset_from_dict(data, source="json", source_path=path)
-            presets[preset.preset_id] = preset
-        except Exception as e:
-            print(f"VARNING: kunde inte läsa exportpreset {path}: {e}")
+        for filename in sorted(os.listdir(pdir)):
+            if not filename.lower().endswith(".json"):
+                continue
+            path = os.path.join(pdir, filename)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("Preset JSON måste vara ett objekt.")
+                preset = _preset_from_dict(data, source="json", source_path=path)
+                presets[preset.preset_id] = preset
+            except Exception as e:
+                print(f"VARNING: kunde inte läsa exportpreset {path}: {e}")
     return presets
 
 
-def load_presets() -> dict[str, ExportPreset]:
+def load_presets() -> Dict[str, ExportPreset]:
     """Returnerar inbyggda profiler plus externa JSON-profiler.
 
     Om en extern profil har samma preset_id som en inbyggd profil skriver den
@@ -365,24 +371,24 @@ def load_presets() -> dict[str, ExportPreset]:
     return presets
 
 
-def get_preset(preset_id: str | None) -> ExportPreset:
+def get_preset(preset_id: Optional[str]) -> ExportPreset:
     presets = load_presets()
     if not preset_id:
         return presets[DEFAULT_PRESET_ID]
     return presets.get(preset_id, presets[DEFAULT_PRESET_ID])
 
 
-def list_presets() -> list[ExportPreset]:
+def list_presets() -> List[ExportPreset]:
     return list(load_presets().values())
 
 
-def _append_unique(target: list[str], columns: Iterable[str], existing: set[str]) -> None:
+def _append_unique(target: List[str], columns: Iterable[str], existing: Set[str]) -> None:
     for col in columns:
         if col in existing and col not in target:
             target.append(col)
 
 
-def apply_export_preset(df: pd.DataFrame, preset_id: str | None) -> pd.DataFrame:
+def apply_export_preset(df: pd.DataFrame, preset_id: Optional[str]) -> pd.DataFrame:
     """Returnerar en kopia av df med kolumner enligt vald exportprofil."""
     preset = get_preset(preset_id)
 
@@ -415,9 +421,9 @@ def apply_export_preset(df: pd.DataFrame, preset_id: str | None) -> pd.DataFrame
     return df.loc[:, selected].copy()
 
 
-def get_known_export_columns() -> list[str]:
+def get_known_export_columns() -> List[str]:
     """Kolumner som kan väljas i preset-editorn. Ordningen är stabil och praktisk."""
-    columns: list[str] = []
+    columns: List[str] = []
     for group in (
         CORE_INPUT_COLUMNS,
         IDENTIFICATION_COLUMNS,
@@ -432,7 +438,7 @@ def get_known_export_columns() -> list[str]:
     return columns
 
 
-def save_custom_preset(data: dict[str, Any]) -> tuple[str, str]:
+def save_custom_preset(data: Dict[str, Any]) -> Tuple[str, str]:
     """Sparar en användarskapad preset som JSON i <dev/prod>/export_presets/."""
     label = str(data.get("label") or data.get("name") or "Egen preset").strip()
     preset_id = str(data.get("preset_id") or data.get("id") or _slugify(label)).strip()
@@ -466,7 +472,7 @@ def _slugify(text: str) -> str:
     return text or "custom_preset"
 
 
-def preset_to_dict(preset: ExportPreset, *, preset_id: str | None = None, label: str | None = None) -> dict[str, Any]:
+def preset_to_dict(preset: ExportPreset, *, preset_id: Optional[str] = None, label: Optional[str] = None) -> Dict[str, Any]:
     data = asdict(preset)
     data.pop("source", None)
     data.pop("source_path", None)
@@ -481,7 +487,7 @@ def preset_to_dict(preset: ExportPreset, *, preset_id: str | None = None, label:
     return data
 
 
-def save_preset_copy(source_preset_id: str | None, new_label: str) -> tuple[str, str]:
+def save_preset_copy(source_preset_id: Optional[str], new_label: str) -> Tuple[str, str]:
     """Sparar en kopia av vald profil som JSON i <dev/prod>/export_presets/.
 
     Returnerar (new_preset_id, path).
@@ -509,7 +515,7 @@ def save_preset_copy(source_preset_id: str | None, new_label: str) -> tuple[str,
     return preset_id, path
 
 
-def preset_summary_text(preset_id: str | None) -> str:
+def preset_summary_text(preset_id: Optional[str]) -> str:
     preset = get_preset(preset_id)
     column_mode = []
     if preset.include_all_columns:

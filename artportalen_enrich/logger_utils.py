@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """Loggning och debug-buffert."""
 
+import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 LOG_FILE: Optional[str] = None
 DEBUG: bool = False
 DEBUG_ROWS: List[Dict[str, Any]] = []
+_LOG_LISTENERS: List[Any] = []
 
 
 def configure_logging(log_file: str, debug: bool) -> None:
@@ -14,6 +16,16 @@ def configure_logging(log_file: str, debug: bool) -> None:
     LOG_FILE = log_file
     DEBUG = bool(debug)
     DEBUG_ROWS = []
+
+
+def add_log_listener(callback: Any) -> None:
+    if callback not in _LOG_LISTENERS:
+        _LOG_LISTENERS.append(callback)
+
+
+def remove_log_listener(callback: Any) -> None:
+    if callback in _LOG_LISTENERS:
+        _LOG_LISTENERS.remove(callback)
 
 
 def is_debug() -> bool:
@@ -31,11 +43,27 @@ def get_debug_rows() -> List[Dict[str, Any]]:
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
-    print(line)
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        try:
+            if hasattr(sys.stdout, "buffer"):
+                sys.stdout.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+                sys.stdout.buffer.flush()
+            else:
+                print(line.encode("ascii", errors="replace").decode("ascii"))
+        except Exception:
+            pass
 
     if LOG_FILE:
         try:
             with open(LOG_FILE, "a", encoding="utf-8") as lf:
                 lf.write(line + "\n")
+        except Exception:
+            pass
+
+    for listener in list(_LOG_LISTENERS):
+        try:
+            listener(line)
         except Exception:
             pass

@@ -1,11 +1,7 @@
-# -*- coding: utf-8 -*-
-"""TaxonListService: definitioner, medlemskap och skyddsflaggor."""
+from typing import Any, Dict, Iterable, List, Optional, Set
 
-from typing import Any, Dict, Iterable, List, Set
-
-import requests
-
-from .config import HEADERS_LISTS, TIMEOUT, TLS_DEFS_URL, TLS_TAXA_URL
+from .config import TLS_DEFS_URL, TLS_TAXA_URL
+from .http_client import default_client
 from .logger_utils import is_debug, log
 from .utils import json_safe, normkey
 
@@ -37,7 +33,7 @@ def _ids_by_contains_any(substrs: List[str]) -> Set[int]:
 def _ids_by_required_groups(
     required_groups: List[List[str]],
     *,
-    exclude: List[str] | None = None,
+    exclude: Optional[List[str]] = None,
     known_ids: Iterable[int] = (),
 ) -> Set[int]:
     """Hitta list-id:n där varje termgrupp matchas minst en gång.
@@ -68,7 +64,7 @@ def fetch_tls_definitions() -> None:
     _TLS_DEFS, _TLS_CATSETS, _TLS_DEFS_READY = {}, {}, False
 
     try:
-        r = requests.get(TLS_DEFS_URL, headers=HEADERS_LISTS, timeout=TIMEOUT)
+        r = default_client.get_lists(TLS_DEFS_URL)
         if r.status_code != 200:
             log(f"TLS /definitions {r.status_code}: {r.text[:160]!r}")
             return
@@ -196,7 +192,7 @@ def tls_fetch_members_for_list_ids(list_ids: Set[int]) -> Set[int]:
             "conservationListIds": sorted(list(list_ids)),
             "outputFields": ["id"],
         }
-        r = requests.post(TLS_TAXA_URL, headers=HEADERS_LISTS, json=payload, timeout=TIMEOUT)
+        r = default_client.post_lists(TLS_TAXA_URL, json_data=payload)
         if r.status_code != 200 or not r.content:
             log(f"TLS /taxa {r.status_code} — {r.text[:200]!r}")
             return set()

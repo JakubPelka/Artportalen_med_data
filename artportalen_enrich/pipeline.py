@@ -5,11 +5,9 @@ Enrichment SLU/API jest wspólny. Różnice między Artportalen i AGOL są obsł
 na początku procesu przez input_loaders.py.
 """
 
-from __future__ import annotations
-
 import os
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -29,7 +27,6 @@ from .processing import (
 from .risk_merge import optional_merge_risk_file
 from .taxon_client import resolve_taxon_id
 from .tls_client import fetch_tls_definitions, tls_build_memberships, tls_definitions_ready
-from .ui import pick_inputs
 
 
 def _as_clean_text(value: object) -> str:
@@ -46,7 +43,7 @@ def _as_clean_text(value: object) -> str:
     return text
 
 
-def _name_key(row: pd.Series, columns: InputColumns) -> tuple[str, str]:
+def _name_key(row: pd.Series, columns: InputColumns) -> Tuple[str, str]:
     sv = _as_clean_text(row.get(columns.swedish_name, "")) if columns.swedish_name else ""
     sci = _as_clean_text(row.get(columns.scientific_name, "")) if columns.scientific_name else ""
     return sv, sci
@@ -56,7 +53,7 @@ def _resolve_taxon_ids_for_unique_names(
     df: pd.DataFrame,
     columns: InputColumns,
     row_mask: Optional[pd.Series] = None,
-) -> dict[tuple[str, str], int]:
+) -> Dict[Tuple[str, str], int]:
     """Resolve TaxonId raz dla każdej unikalnej pary nazwa szwedzka/naukowa."""
     if not columns.swedish_name and not columns.scientific_name:
         return {}
@@ -66,8 +63,8 @@ def _resolve_taxon_ids_for_unique_names(
     else:
         subset = df.loc[row_mask]
 
-    name_keys: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    name_keys: List[Tuple[str, str]] = []
+    seen: Set[Tuple[str, str]] = set()
     for _, row in subset.iterrows():
         key = _name_key(row, columns)
         if not key[0] and not key[1]:
@@ -79,7 +76,7 @@ def _resolve_taxon_ids_for_unique_names(
 
     log(f"Do dopasowania TaxonId po nazwach: {len(name_keys)} unikalnych nazw/par nazw.")
 
-    resolved: dict[tuple[str, str], int] = {}
+    resolved: Dict[Tuple[str, str], int] = {}
     for i, key in enumerate(name_keys, start=1):
         sv, sci = key
         rec = {}
@@ -143,7 +140,7 @@ def ensure_taxon_id(df: pd.DataFrame, columns: InputColumns) -> pd.DataFrame:
     log("Etap 1: wyznaczanie TaxonId po nazwach — tryb unikalnych nazw, nie po każdym rekordzie.")
     resolved = _resolve_taxon_ids_for_unique_names(out, columns)
 
-    taxon_ids: list[int] = []
+    taxon_ids: List[int] = []
     for _, row in out.iterrows():
         taxon_ids.append(int(resolved.get(_name_key(row, columns), 0) or 0))
 
@@ -153,7 +150,7 @@ def ensure_taxon_id(df: pd.DataFrame, columns: InputColumns) -> pd.DataFrame:
     return out
 
 
-def unique_taxon_ids(df: pd.DataFrame) -> list[int]:
+def unique_taxon_ids(df: pd.DataFrame) -> List[int]:
     taxon_series = pd.to_numeric(df["TaxonId"], errors="coerce").fillna(0).astype("int64")
     uniq_ids = sorted(set(int(t) for t in taxon_series.tolist() if t > 0))
     valid_count = int((taxon_series > 0).sum())
@@ -178,16 +175,19 @@ def write_excel(path: str, df: pd.DataFrame) -> None:
     log(f"Zapisano: {path}")
 
 
-def main() -> None:
-    paths = pick_inputs()
-
+def run_pipeline(
+    paths: Dict[str, Any],
+    progress_callback: Optional[Any] = None,
+    cancel_event: Optional[Any] = None,
+) -> None:
+    """Główna funkcja wykonawcza pipeline enrichmentu."""
     try:
         if os.path.exists(paths["LOG_FILE"]):
             os.remove(paths["LOG_FILE"])
     except Exception:
         pass
 
-    configure_logging(paths["LOG_FILE"], bool(paths["DEBUG"]))
+    configure_logging(paths["LOG_FILE"], bool(paths.get("DEBUG", False)))
 
     log(f"Plik wejściowy: {paths['INPUT_FILE']}")
     log(f"Deklarowany typ wejścia: {paths.get('INPUT_SOURCE', 'auto')}")
@@ -204,6 +204,9 @@ def main() -> None:
         f"IAS_Union_EU={'tak' if preset.include_ias_union_eu_filter else 'nie'}."
     )
 
+    if progress_callback:
+        progress_callback(0, 100, "Wczytywanie pliku wejściowego...")
+
     input_result = read_input_file(paths["INPUT_FILE"], paths.get("INPUT_SOURCE", "auto"))
     df = ensure_taxon_id(input_result.dataframe, input_result.columns)
 
@@ -215,10 +218,29 @@ def main() -> None:
     else:
         log("TLS: /definitions niedostępne — użyję tylko fallbacków z SpeciesDataService.")
 
-    result = build_enrichment_table(uniq_ids)
+    refresh_cache = bool(paths.get("REFRESH_CACHE", False)) or os.getenv("ARTPORTALEN_REFRESH_CACHE", "0").strip().lower() in {"1", "true", "yes"}
+    if refresh_cache:
+        log("Tryb odświeżania cache: wymuszam pobranie świeżych danych z API.")
+
+    if progress_callback:
+        progress_callback(10, 100, f"Pobieranie danych dla {len(uniq_ids)} unikalnych taksonów...")
+
+    max_workers = paths.get("MAX_WORKERS")
+    result = build_enrichment_table(
+        uniq_ids,
+        force_refresh=refresh_cache,
+        max_workers=max_workers,
+        progress_callback=lambda cur, tot, msg: progress_callback(
+            10 + int((cur / max(1, tot)) * 70), 100, f"{cur}/{tot} taksonów — {msg}"
+        ) if progress_callback else None,
+        cancel_event=cancel_event,
+    )
     full_enriched = make_full_enriched(df, result)
 
-    if paths["WANT_FULL"]:
+    if progress_callback:
+        progress_callback(85, 100, "Zapisywanie plików Excel...")
+
+    if paths.get("WANT_FULL", False):
         full_sorted = sort_by_redlist(full_enriched)
         write_excel(paths["OUT_FULL"], full_sorted)
 
@@ -244,4 +266,12 @@ def main() -> None:
 
     optional_merge_risk_file(os.path.dirname(paths["INPUT_FILE"]), paths["OUT_WITH"])
 
+    if progress_callback:
+        progress_callback(100, 100, "Zakończono pomyślnie!")
+
     log("Proces zakończony sukcesem!")
+
+
+def main() -> None:
+    from .ui import launch_gui
+    launch_gui(run_pipeline)

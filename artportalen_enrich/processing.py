@@ -2,12 +2,13 @@
 """Pobieranie danych gatunkowych i budowanie tabel wynikowych."""
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
-import requests
 
-from .config import HEADERS_SPECIES, SPECIES_SLEEP, SPECIES_URL, TIMEOUT, RL_ORDER
+from .cache import default_cache
+from .config import DEFAULT_MAX_WORKERS, RL_ORDER, SPECIES_SLEEP, SPECIES_URL
+from .http_client import default_client
 from .logger_utils import add_debug_row, is_debug, log
 from .species_helpers import (
     any_child_named,
@@ -23,6 +24,7 @@ DATA_COLUMNS = [
     "ScientificName",
     "SwedishName",
     "DisplayName",
+    "Author",
     "Category",
     "ConservationStatus",
     "RedListCategory",
@@ -64,6 +66,8 @@ DATA_COLUMNS = [
     "Other",
     "SwedishPresence",
     "ImmigrationHistory",
+    "SwedishOccurrence",
+    "SwedishHistory",
     "SubstrateInformation",
     "EcologicalGroups",
     "ConservationEcology",
@@ -182,18 +186,29 @@ def _new_record() -> Dict[str, Any]:
     return {c: "" for c in DATA_COLUMNS}
 
 
-def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Hämtar och tolkar SpeciesDataService för ett TaxonId."""
+def fetch_species_record(
+    tid: int,
+    index: int = 1,
+    total: int = 1,
+    force_refresh: bool = False,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Hämtar och tolkar SpeciesDataService för ett TaxonId (z obsługą cache SQLite)."""
     record = _new_record()
     dbg: Dict[str, Any] = {"TaxonId": tid}
 
     try:
-        resp = requests.get(
-            f"{SPECIES_URL}?taxa={tid}&culture=sv-SE",
-            headers=HEADERS_SPECIES,
-            timeout=TIMEOUT,
-        )
-        data = json_safe(resp) if resp and resp.status_code == 200 else []
+        cached_data = default_cache.get("species_data", tid, culture="sv_SE", force_refresh=force_refresh)
+        if cached_data is not None:
+            data = cached_data
+        else:
+            resp = default_client.get_species(
+                SPECIES_URL,
+                params={"taxa": tid, "culture": "sv-SE"},
+            )
+            data = json_safe(resp) if resp and resp.status_code == 200 else []
+            if resp and resp.status_code == 200 and data:
+                default_cache.set("species_data", tid, data, culture="sv_SE")
+
         item = (data[0] if isinstance(data, list) and data else data) or {}
         obj = item.get("speciesData", item) or {}
 
@@ -209,6 +224,7 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         record["ScientificName"] = obj.get("scientificName") or item.get("scientificName") or ""
         record["SwedishName"] = gv("swedishName")
         record["DisplayName"] = gv("displayName")
+        record["Author"] = obj.get("author") or item.get("author") or ""
         record["Category"] = gv("category", "name")
         record["ConservationStatus"] = gv("conservationStatus")
 
@@ -364,6 +380,8 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         tri = obj.get("taxonRelatedInformation", {}) or {}
         record["SwedishPresence"] = tri.get("swedishPresence", "") or ""
         record["ImmigrationHistory"] = tri.get("immigrationHistory", "") or ""
+        record["SwedishOccurrence"] = tri.get("swedishOccurrence", "") or ""
+        record["SwedishHistory"] = tri.get("swedishHistory", "") or ""
 
         sub = obj.get("substrateInformation", []) or []
         record["SubstrateInformation"] = join_name_with_attr(sub, "name", sub="use")
@@ -432,22 +450,71 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
     return record, dbg
 
 
-def build_enrichment_table(uniq_ids: List[int]) -> pd.DataFrame:
+def build_enrichment_table(
+    uniq_ids: List[int],
+    force_refresh: bool = False,
+    max_workers: Optional[int] = None,
+    progress_callback: Optional[Any] = None,
+    cancel_event: Optional[Any] = None,
+) -> pd.DataFrame:
+    """Buduje tabelę enrichmentu dla unikalnych TaxonId (sekwencyjnie lub wielowątkowo)."""
     store = {c: [] for c in DATA_COLUMNS}
     id_bucket = []
 
-    for k, tid in enumerate(uniq_ids, start=1):
-        log(f"— {k}/{len(uniq_ids)} — TaxonId={tid}")
-        record, dbg = fetch_species_record(tid, k, len(uniq_ids))
+    workers = DEFAULT_MAX_WORKERS if max_workers is None else int(max_workers)
+    total_taxa = len(uniq_ids)
 
-        id_bucket.append(tid)
-        for c in DATA_COLUMNS:
-            store[c].append(record.get(c, ""))
+    if workers <= 1 or total_taxa <= 1:
+        for k, tid in enumerate(uniq_ids, start=1):
+            if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+                log("Anulowanie żądane przez użytkownika.")
+                raise RuntimeError("Operacja została anulowana przez użytkownika.")
 
-        if is_debug():
-            add_debug_row(dbg)
+            log(f"— {k}/{total_taxa} — TaxonId={tid}")
+            record, dbg = fetch_species_record(tid, k, total_taxa, force_refresh=force_refresh)
 
-        time.sleep(SPECIES_SLEEP)
+            id_bucket.append(tid)
+            for c in DATA_COLUMNS:
+                store[c].append(record.get(c, ""))
+
+            if is_debug():
+                add_debug_row(dbg)
+
+            if progress_callback:
+                try:
+                    progress_callback(k, total_taxa, f"Pobrano {k}/{total_taxa} taksonów")
+                except Exception:
+                    pass
+
+            time.sleep(SPECIES_SLEEP)
+    else:
+        import concurrent.futures
+        log(f"Uruchamiam pobieranie danych dla {total_taxa} taksonów z {workers} wątkami roboczymi.")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_tid = {
+                tid: executor.submit(fetch_species_record, tid, k, total_taxa, force_refresh=force_refresh)
+                for k, tid in enumerate(uniq_ids, start=1)
+            }
+            # Odbiór w DOKŁADNEJ kolejności wejściowej uniq_ids dla 100% determinizmu
+            for k, tid in enumerate(uniq_ids, start=1):
+                if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+                    log("Anulowanie żądane przez użytkownika.")
+                    executor.shutdown(wait=False)
+                    raise RuntimeError("Operacja została anulowana przez użytkownika.")
+
+                record, dbg = future_to_tid[tid].result()
+                id_bucket.append(tid)
+                for c in DATA_COLUMNS:
+                    store[c].append(record.get(c, ""))
+
+                if is_debug():
+                    add_debug_row(dbg)
+
+                if progress_callback:
+                    try:
+                        progress_callback(k, total_taxa, f"Pobrano {k}/{total_taxa} taksonów")
+                    except Exception:
+                        pass
 
     result = pd.DataFrame({"TaxonId": id_bucket}) if id_bucket else pd.DataFrame(columns=["TaxonId"])
     for c in DATA_COLUMNS:
@@ -479,7 +546,7 @@ def clean_flag_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def has_redlist_protection(row: pd.Series, redlist_categories: set[str] | None = None) -> bool:
+def has_redlist_protection(row: pd.Series, redlist_categories: Optional[Set[str]] = None) -> bool:
     """Returnerar True om RedListCategory finns i valt kategoriurval."""
     if "RedListCategory" not in row.index:
         return False
@@ -503,7 +570,7 @@ def has_ias_union_eu_flag(row: pd.Series) -> bool:
     return not is_empty_value(row.get("IAS_Union_EU"))
 
 
-def has_protection(row: pd.Series, preset: object | None = None) -> bool:
+def has_protection(row: pd.Series, preset: Optional[object] = None) -> bool:
     """Filter för *_bara_skyddade.xlsx.
 
     Default: nuvarande skydds-/naturvårdsflaggor + rödlistning RE/CR/EN/VU/NT.
@@ -556,7 +623,7 @@ def make_overview(full_enriched: pd.DataFrame) -> pd.DataFrame:
     return overview
 
 
-def make_protected(overview: pd.DataFrame, preset: object | None = None) -> pd.DataFrame:
+def make_protected(overview: pd.DataFrame, preset: Optional[object] = None) -> pd.DataFrame:
     protected = overview[overview.apply(lambda r: has_protection(r, preset), axis=1)].copy()
     protected.replace(["N/A", "0", 0, None], "", inplace=True)
     protected = sort_by_redlist(protected)

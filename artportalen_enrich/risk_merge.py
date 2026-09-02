@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from .config import REPO_ROOT, SCRIPT_DIR
+from .config import REPO_ROOT
 from .logger_utils import log
 
 
@@ -29,13 +29,12 @@ def unique_existing_dirs(paths: List[str]) -> List[str]:
 def find_risk_file(input_dir: str, out_dir: str) -> Optional[str]:
     """
     Szuka pliku Riskklassning/Risklista.
-    Priorytet: root repo → folder wejściowy → folder wyjściowy → folder skryptu.
+    Priorytet: root repo → folder wejściowy → folder wyjściowy.
     """
     search_dirs = unique_existing_dirs([
         REPO_ROOT,
         input_dir,
         out_dir,
-        SCRIPT_DIR,
     ])
 
     exact_names = [

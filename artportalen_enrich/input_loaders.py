@@ -10,13 +10,11 @@ Ten moduł odpowiada tylko za początek procesu:
 Cały enrichment SLU/API pozostaje wspólny i jest wykonywany dalej w pipeline.py.
 """
 
-from __future__ import annotations
-
 import os
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -121,6 +119,9 @@ ARTPORTALEN_MARKERS = {
     "taxonrodlistad",
     "taxonrödlistad",
     "lokalnamn",
+    "lokallokalitet",
+    "lokal",
+    "auktor",
     "kommun",
     "landskap",
     "provins",
@@ -128,6 +129,8 @@ ARTPORTALEN_MARKERS = {
     "slutdatum",
     "observationsdatum",
     "fynddatum",
+    "ostx",
+    "nordy",
 }
 
 
@@ -142,11 +145,11 @@ def _norm(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", text)
 
 
-def _norm_columns(df: pd.DataFrame) -> dict[str, str]:
+def _norm_columns(df: pd.DataFrame) -> Dict[str, str]:
     return {_norm(c): str(c) for c in df.columns}
 
 
-def _find_column_fuzzy(df: pd.DataFrame, aliases: list[str]) -> Optional[str]:
+def _find_column_fuzzy(df: pd.DataFrame, aliases: List[str]) -> Optional[str]:
     """Hittar kolumn med normaliserad jämförelse och faller tillbaka på find_column."""
     direct = find_column(df, aliases)
     if direct:
@@ -255,7 +258,7 @@ def detect_input_source(df: pd.DataFrame) -> str:
     return "auto"
 
 
-def standardize_input_dataframe(df: pd.DataFrame, source_type: str) -> tuple[pd.DataFrame, InputColumns]:
+def standardize_input_dataframe(df: pd.DataFrame, source_type: str) -> Tuple[pd.DataFrame, InputColumns]:
     """Dodaje kanoniczne kolumny pomocnicze, nie usuwając oryginalnych kolumn."""
     out = df.copy()
     cols = detect_input_columns(out)

@@ -100,19 +100,18 @@ def main():
     check_dependencies()
     check_secrets(repo_root)
 
-    env = choose_environment()
-    target_dir = repo_root / env
+    sys.path.insert(0, str(repo_root))
 
-    if not target_dir.exists():
-        print(f"Błąd: Katalog {target_dir} nie istnieje!")
-        sys.exit(1)
+    # Sprawdź czy przekazano argumenty wiersza poleceń
+    from artportalen_enrich.cli import parse_cli_args, run_cli
+    config = parse_cli_args()
 
-    print(f"\n-> Uruchamianie wersji: {env.upper()} ({target_dir})\n")
+    if config is not None:
+        # Tryb CLI / Headless
+        exit_code = run_cli()
+        sys.exit(exit_code)
 
-    # Dodaj wybrany katalog (dev lub prod) na początek sys.path
-    sys.path.insert(0, str(target_dir))
-    os.chdir(str(target_dir))
-
+    # Domyślny tryb graficzny GUI
     try:
         from artportalen_enrich.pipeline import main as pipeline_main
         pipeline_main()
