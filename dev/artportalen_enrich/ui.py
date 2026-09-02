@@ -3,7 +3,7 @@
 
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
@@ -24,64 +24,50 @@ from .export_presets import (
 REDLIST_CHOICES = ("RE", "CR", "EN", "VU", "NT", "DD", "LC", "NA", "NE")
 
 
-def _center_window(window: tk.Toplevel) -> None:
-    """Placera ett Tkinter-fönster ungefär centralt på skärmen."""
-    window.update_idletasks()
-    width = window.winfo_width()
-    height = window.winfo_height()
-    x = (window.winfo_screenwidth() // 2) - (width // 2)
-    y = (window.winfo_screenheight() // 2) - (height // 2)
-    window.geometry(f"+{x}+{y}")
+def _center_window(win: tk.Toplevel, width: int = 760, height: int = 600) -> None:
+    win.update_idletasks()
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+    x = max(40, (sw - width) // 2)
+    y = max(40, (sh - height) // 2)
+    win.geometry(f"{width}x{height}+{x}+{y}")
 
 
-def _bring_to_front(window: tk.Toplevel) -> None:
-    """
-    Försök visa dialogen ovanpå andra fönster.
-
-    Detta är viktigt på Windows, där en Toplevel-dialog som skapas från ett
-    dolt root-fönster ibland hamnar bakom terminalen. Då ser programmet ut att
-    ha hängt sig, trots att det bara väntar på dialogen.
-    """
+def _bring_to_front(win: tk.Toplevel) -> None:
     try:
-        window.lift()
-        window.attributes("-topmost", True)
-        window.after(500, lambda: window.attributes("-topmost", False))
-        window.focus_force()
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after_idle(win.attributes, "-topmost", False)
+        win.focus_force()
     except Exception:
         pass
 
 
 def _show_preset_preview(root: tk.Tk, preset_id: str) -> None:
-    """Visar en läsbar förhandsvisning av vald exportprofil."""
     win = tk.Toplevel(root)
-    win.title("Podgląd / förhandsvisning presetu")
-    win.geometry("760x620")
-    win.minsize(640, 420)
+    win.title(f"Podgląd profilu eksportu: {preset_id}")
+    win.geometry("700x520")
+    win.minsize(560, 360)
+    win.grab_set()
 
-    frame = tk.Frame(win, padx=12, pady=12)
-    frame.pack(fill="both", expand=True)
+    outer = tk.Frame(win, padx=12, pady=12)
+    outer.pack(fill="both", expand=True)
 
-    text = ScrolledText(frame, wrap="word", width=90, height=32)
-    text.pack(fill="both", expand=True)
+    text = ScrolledText(outer, wrap="word", height=20)
+    text.pack(fill="both", expand=True, pady=(0, 10))
     text.insert("1.0", preset_summary_text(preset_id))
     text.configure(state="disabled")
 
-    buttons = tk.Frame(frame)
-    buttons.pack(fill="x", pady=(10, 0))
-    tk.Button(buttons, text="OK", command=win.destroy, width=12).pack(side="right")
+    btn = tk.Button(outer, text="Zamknij", command=win.destroy, width=14)
+    btn.pack(side="right")
 
-    _center_window(win)
+    _center_window(win, 700, 520)
     _bring_to_front(win)
-    win.grab_set()
     root.wait_window(win)
 
 
-def _show_preset_editor(root: tk.Tk, preset_id: str) -> tuple[str | None, str | None]:
-    """Enkel editor för att skapa en ny JSON-preset från vald preset.
-
-    Editorn ändrar inte befintliga filer direkt. Den sparar alltid en ny JSON-preset
-    i dev/export_presets eller prod/export_presets beroende på var start.py körs.
-    """
+def _show_preset_editor(root: tk.Tk, preset_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Edytor profilu eksportu: pozwala włączyć/wyłączyć kolumny i filtry."""
     base = get_preset(preset_id)
     result: dict[str, str | None] = {"preset_id": None, "path": None}
 
@@ -137,7 +123,7 @@ def _show_preset_editor(root: tk.Tk, preset_id: str) -> tuple[str | None, str | 
 
     red_frame = tk.Frame(options)
     red_frame.grid(row=3, column=1, sticky="w", padx=(12, 0))
-    red_vars: dict[str, tk.BooleanVar] = {}
+    red_vars: Dict[str, tk.BooleanVar] = {}
     selected_red = {str(x).upper() for x in base.redlist_categories}
     for i, cat in enumerate(REDLIST_CHOICES):
         var = tk.BooleanVar(master=win, value=cat in selected_red)
@@ -169,7 +155,7 @@ def _show_preset_editor(root: tk.Tk, preset_id: str) -> tuple[str | None, str | 
     if base.include_all_columns:
         base_columns = set(known_columns)
 
-    col_vars: dict[str, tk.BooleanVar] = {}
+    col_vars: Dict[str, tk.BooleanVar] = {}
     for idx, col in enumerate(known_columns):
         var = tk.BooleanVar(master=win, value=col in base_columns)
         col_vars[col] = var

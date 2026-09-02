@@ -5,11 +5,9 @@ Enrichment SLU/API jest wspólny. Różnice między Artportalen i AGOL są obsł
 na początku procesu przez input_loaders.py.
 """
 
-from __future__ import annotations
-
 import os
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -46,7 +44,7 @@ def _as_clean_text(value: object) -> str:
     return text
 
 
-def _name_key(row: pd.Series, columns: InputColumns) -> tuple[str, str]:
+def _name_key(row: pd.Series, columns: InputColumns) -> Tuple[str, str]:
     sv = _as_clean_text(row.get(columns.swedish_name, "")) if columns.swedish_name else ""
     sci = _as_clean_text(row.get(columns.scientific_name, "")) if columns.scientific_name else ""
     return sv, sci
@@ -56,7 +54,7 @@ def _resolve_taxon_ids_for_unique_names(
     df: pd.DataFrame,
     columns: InputColumns,
     row_mask: Optional[pd.Series] = None,
-) -> dict[tuple[str, str], int]:
+) -> Dict[Tuple[str, str], int]:
     """Resolve TaxonId raz dla każdej unikalnej pary nazwa szwedzka/naukowa."""
     if not columns.swedish_name and not columns.scientific_name:
         return {}
@@ -66,8 +64,8 @@ def _resolve_taxon_ids_for_unique_names(
     else:
         subset = df.loc[row_mask]
 
-    name_keys: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    name_keys: List[Tuple[str, str]] = []
+    seen: Set[Tuple[str, str]] = set()
     for _, row in subset.iterrows():
         key = _name_key(row, columns)
         if not key[0] and not key[1]:
@@ -79,7 +77,7 @@ def _resolve_taxon_ids_for_unique_names(
 
     log(f"Do dopasowania TaxonId po nazwach: {len(name_keys)} unikalnych nazw/par nazw.")
 
-    resolved: dict[tuple[str, str], int] = {}
+    resolved: Dict[Tuple[str, str], int] = {}
     for i, key in enumerate(name_keys, start=1):
         sv, sci = key
         rec = {}
@@ -143,7 +141,7 @@ def ensure_taxon_id(df: pd.DataFrame, columns: InputColumns) -> pd.DataFrame:
     log("Etap 1: wyznaczanie TaxonId po nazwach — tryb unikalnych nazw, nie po każdym rekordzie.")
     resolved = _resolve_taxon_ids_for_unique_names(out, columns)
 
-    taxon_ids: list[int] = []
+    taxon_ids: List[int] = []
     for _, row in out.iterrows():
         taxon_ids.append(int(resolved.get(_name_key(row, columns), 0) or 0))
 
@@ -153,7 +151,7 @@ def ensure_taxon_id(df: pd.DataFrame, columns: InputColumns) -> pd.DataFrame:
     return out
 
 
-def unique_taxon_ids(df: pd.DataFrame) -> list[int]:
+def unique_taxon_ids(df: pd.DataFrame) -> List[int]:
     taxon_series = pd.to_numeric(df["TaxonId"], errors="coerce").fillna(0).astype("int64")
     uniq_ids = sorted(set(int(t) for t in taxon_series.tolist() if t > 0))
     valid_count = int((taxon_series > 0).sum())

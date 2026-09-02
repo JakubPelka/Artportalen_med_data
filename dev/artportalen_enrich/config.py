@@ -9,35 +9,38 @@ REPO_ROOT = os.path.dirname(SCRIPT_DIR)     # katalog główny repozytorium
 SECRETS_DIR = os.path.join(REPO_ROOT, "secrets")
 
 
-def load_secret(filename: str) -> str:
+def load_secret(filename: str, env_var: str = "", required: bool = False) -> str:
     """
-    Wczytuje lokalny plik tekstowy z tokenem API.
-    Plik powinien zawierać tylko sam token, bez cudzysłowów i bez dodatkowego opisu.
+    Wczytuje token API ze zmiennej środowiskowej lub pliku w katalogu secrets/.
     """
-    path = os.path.join(SECRETS_DIR, filename)
+    if env_var:
+        env_val = os.getenv(env_var, "").strip()
+        if env_val:
+            return env_val
 
-    if not os.path.exists(path):
+    path = os.path.join(SECRETS_DIR, filename)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                token = f.read().strip()
+            if token:
+                return token
+        except Exception:
+            pass
+
+    if required:
         raise FileNotFoundError(
-            f"Brak pliku z kluczem API: {filename}\n"
-            f"Oczekiwana lokalizacja: {path}\n"
+            f"Brak klucza API (zmienna {env_var} lub plik {filename}).\n"
+            f"Oczekiwana lokalizacja pliku: {path}\n"
             f"Utwórz folder 'secrets' w katalogu głównym repozytorium i dodaj tam plik {filename}."
         )
 
-    with open(path, "r", encoding="utf-8") as f:
-        token = f.read().strip()
-
-    if not token:
-        raise ValueError(
-            f"Plik {filename} istnieje, ale jest pusty.\n"
-            f"Wpisz do niego sam token API."
-        )
-
-    return token
+    return ""
 
 
-TAXONOMY_KEY = load_secret("taxonomykey.txt")
-SPECIES_KEY = load_secret("specieskey.txt")
-LISTS_KEY = load_secret("listskey.txt")
+TAXONOMY_KEY = load_secret("taxonomykey.txt", env_var="TAXONOMY_KEY")
+SPECIES_KEY = load_secret("specieskey.txt", env_var="SPECIES_KEY")
+LISTS_KEY = load_secret("listskey.txt", env_var="LISTS_KEY")
 
 NAME_QUERY_SLEEP = 0.08
 SPECIES_SLEEP = 0.08

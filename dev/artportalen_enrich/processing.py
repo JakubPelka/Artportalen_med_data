@@ -2,7 +2,7 @@
 """Pobieranie danych gatunkowych i budowanie tabel wynikowych."""
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
@@ -479,7 +479,7 @@ def clean_flag_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def has_redlist_protection(row: pd.Series, redlist_categories: set[str] | None = None) -> bool:
+def has_redlist_protection(row: pd.Series, redlist_categories: Optional[Set[str]] = None) -> bool:
     """Returnerar True om RedListCategory finns i valt kategoriurval."""
     if "RedListCategory" not in row.index:
         return False
@@ -503,7 +503,7 @@ def has_ias_union_eu_flag(row: pd.Series) -> bool:
     return not is_empty_value(row.get("IAS_Union_EU"))
 
 
-def has_protection(row: pd.Series, preset: object | None = None) -> bool:
+def has_protection(row: pd.Series, preset: Optional[object] = None) -> bool:
     """Filter för *_bara_skyddade.xlsx.
 
     Default: nuvarande skydds-/naturvårdsflaggor + rödlistning RE/CR/EN/VU/NT.
@@ -556,7 +556,7 @@ def make_overview(full_enriched: pd.DataFrame) -> pd.DataFrame:
     return overview
 
 
-def make_protected(overview: pd.DataFrame, preset: object | None = None) -> pd.DataFrame:
+def make_protected(overview: pd.DataFrame, preset: Optional[object] = None) -> pd.DataFrame:
     protected = overview[overview.apply(lambda r: has_protection(r, preset), axis=1)].copy()
     protected.replace(["N/A", "0", 0, None], "", inplace=True)
     protected = sort_by_redlist(protected)

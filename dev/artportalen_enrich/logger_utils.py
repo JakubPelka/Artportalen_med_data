@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Loggning och debug-buffert."""
 
+import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -31,7 +32,17 @@ def get_debug_rows() -> List[Dict[str, Any]]:
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
-    print(line)
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        try:
+            if hasattr(sys.stdout, "buffer"):
+                sys.stdout.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+                sys.stdout.buffer.flush()
+            else:
+                print(line.encode("ascii", errors="replace").decode("ascii"))
+        except Exception:
+            pass
 
     if LOG_FILE:
         try:

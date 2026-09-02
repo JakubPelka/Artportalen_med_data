@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """TaxonListService: definitioner, medlemskap och skyddsflaggor."""
 
-from typing import Any, Dict, Iterable, List, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import requests
 
@@ -37,7 +37,7 @@ def _ids_by_contains_any(substrs: List[str]) -> Set[int]:
 def _ids_by_required_groups(
     required_groups: List[List[str]],
     *,
-    exclude: List[str] | None = None,
+    exclude: Optional[List[str]] = None,
     known_ids: Iterable[int] = (),
 ) -> Set[int]:
     """Hitta list-id:n där varje termgrupp matchas minst en gång.
