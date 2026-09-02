@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-"""Centralny klient HTTP: requests.Session, connection pooling, retry i exponential backoff."""
-
+import threading
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -23,7 +21,7 @@ INITIAL_BACKOFF_SECONDS = 0.5
 
 
 class HttpClient:
-    """Wspólny klient HTTP z obsługą puli połączeń i bezpiecznego retry."""
+    """Wspólny klient HTTP z obsługą puli połączeń, thread-local sessions i bezpiecznego retry."""
 
     def __init__(
         self,
@@ -36,28 +34,31 @@ class HttpClient:
         self.backoff_factor = backoff_factor
         self.pool_size = pool_size
         self.timeout = timeout
-        self._session: Optional[requests.Session] = None
+        self._local = threading.local()
 
     @property
     def session(self) -> requests.Session:
-        if self._session is None:
-            self._session = requests.Session()
+        sess = getattr(self._local, "session", None)
+        if sess is None:
+            sess = requests.Session()
             adapter = HTTPAdapter(
                 pool_connections=self.pool_size,
                 pool_maxsize=self.pool_size,
                 max_retries=0,  # Zarządzamy retry na poziomie aplikacji dla precyzyjnego logowania
             )
-            self._session.mount("https://", adapter)
-            self._session.mount("http://", adapter)
-        return self._session
+            sess.mount("https://", adapter)
+            sess.mount("http://", adapter)
+            self._local.session = sess
+        return sess
 
     def reset_session(self) -> None:
-        if self._session is not None:
+        sess = getattr(self._local, "session", None)
+        if sess is not None:
             try:
-                self._session.close()
+                sess.close()
             except Exception:
                 pass
-            self._session = None
+            self._local.session = None
 
     def request(
         self,

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 
 from .cache import default_cache
-from .config import RL_ORDER, SPECIES_SLEEP, SPECIES_URL
+from .config import DEFAULT_MAX_WORKERS, RL_ORDER, SPECIES_SLEEP, SPECIES_URL
 from .http_client import default_client
 from .logger_utils import add_debug_row, is_debug, log
 from .species_helpers import (
@@ -450,22 +450,47 @@ def fetch_species_record(
     return record, dbg
 
 
-def build_enrichment_table(uniq_ids: List[int], force_refresh: bool = False) -> pd.DataFrame:
+def build_enrichment_table(
+    uniq_ids: List[int],
+    force_refresh: bool = False,
+    max_workers: Optional[int] = None,
+) -> pd.DataFrame:
+    """Buduje tabelę enrichmentu dla unikalnych TaxonId (sekwencyjnie lub wielowątkowo)."""
     store = {c: [] for c in DATA_COLUMNS}
     id_bucket = []
 
-    for k, tid in enumerate(uniq_ids, start=1):
-        log(f"— {k}/{len(uniq_ids)} — TaxonId={tid}")
-        record, dbg = fetch_species_record(tid, k, len(uniq_ids), force_refresh=force_refresh)
+    workers = DEFAULT_MAX_WORKERS if max_workers is None else int(max_workers)
 
-        id_bucket.append(tid)
-        for c in DATA_COLUMNS:
-            store[c].append(record.get(c, ""))
+    if workers <= 1 or len(uniq_ids) <= 1:
+        for k, tid in enumerate(uniq_ids, start=1):
+            log(f"— {k}/{len(uniq_ids)} — TaxonId={tid}")
+            record, dbg = fetch_species_record(tid, k, len(uniq_ids), force_refresh=force_refresh)
 
-        if is_debug():
-            add_debug_row(dbg)
+            id_bucket.append(tid)
+            for c in DATA_COLUMNS:
+                store[c].append(record.get(c, ""))
 
-        time.sleep(SPECIES_SLEEP)
+            if is_debug():
+                add_debug_row(dbg)
+
+            time.sleep(SPECIES_SLEEP)
+    else:
+        import concurrent.futures
+        log(f"Uruchamiam pobieranie danych dla {len(uniq_ids)} taksonów z {workers} wątkami roboczymi.")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_tid = {
+                tid: executor.submit(fetch_species_record, tid, k, len(uniq_ids), force_refresh=force_refresh)
+                for k, tid in enumerate(uniq_ids, start=1)
+            }
+            # Odbiór w DOKŁADNEJ kolejności wejściowej uniq_ids dla 100% determinizmu
+            for tid in uniq_ids:
+                record, dbg = future_to_tid[tid].result()
+                id_bucket.append(tid)
+                for c in DATA_COLUMNS:
+                    store[c].append(record.get(c, ""))
+
+                if is_debug():
+                    add_debug_row(dbg)
 
     result = pd.DataFrame({"TaxonId": id_bucket}) if id_bucket else pd.DataFrame(columns=["TaxonId"])
     for c in DATA_COLUMNS:

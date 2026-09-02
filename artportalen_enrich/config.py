@@ -44,6 +44,7 @@ LISTS_KEY = load_secret("listskey.txt", env_var="LISTS_KEY")
 NAME_QUERY_SLEEP = 0.08
 SPECIES_SLEEP = 0.08
 TIMEOUT = 30
+DEFAULT_MAX_WORKERS = int(os.getenv("ARTPORTALEN_MAX_WORKERS", "4"))
 
 TAXON_NAME_URL = "https://api.artdatabanken.se/taxonservice/v1/taxa/names"
 SPECIES_URL = "https://api.artdatabanken.se/information/v1/speciesdataservice/v1/speciesdata"
