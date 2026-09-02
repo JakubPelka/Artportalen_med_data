@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "dev"))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from artportalen_enrich.export_presets import (
     apply_export_preset,

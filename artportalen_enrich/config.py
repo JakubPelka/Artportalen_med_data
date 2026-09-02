@@ -4,8 +4,7 @@
 import os
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_DIR = os.path.dirname(PACKAGE_DIR)   # np. .../dev albo .../prod
-REPO_ROOT = os.path.dirname(SCRIPT_DIR)     # katalog główny repozytorium
+REPO_ROOT = os.path.dirname(PACKAGE_DIR)
 SECRETS_DIR = os.path.join(REPO_ROOT, "secrets")
 
 

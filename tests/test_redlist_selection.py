@@ -5,21 +5,18 @@ import sys
 import unittest
 from pathlib import Path
 
-# Add dev and prod to sys.path so we can import both
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "dev"))
-from artportalen_enrich.species_helpers import select_current_or_latest_redlist as dev_select
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-sys.path.insert(0, str(REPO_ROOT / "prod"))
-from artportalen_enrich.species_helpers import select_current_or_latest_redlist as prod_select
+from artportalen_enrich.species_helpers import select_current_or_latest_redlist
 
 
 class TestRedlistSelection(unittest.TestCase):
 
     def setUp(self):
         self.selectors = [
-            ("dev", dev_select),
-            ("prod", prod_select),
+            ("engine", select_current_or_latest_redlist),
         ]
 
     def test_current_period_preferred_over_2020(self):

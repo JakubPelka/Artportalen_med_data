@@ -27,8 +27,8 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 import pandas as pd
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPT_DIR = os.path.dirname(PACKAGE_DIR)  # .../dev eller .../prod
-EXTERNAL_PRESETS_DIR = os.path.join(SCRIPT_DIR, "export_presets")
+REPO_ROOT = os.path.dirname(PACKAGE_DIR)
+EXTERNAL_PRESETS_DIR = os.path.join(REPO_ROOT, "export_presets")
 
 
 @dataclass(frozen=True)
@@ -332,22 +332,27 @@ def _preset_from_dict(data: Dict[str, Any], *, source: str, source_path: str = "
 
 def _load_external_presets() -> Dict[str, ExportPreset]:
     presets: Dict[str, ExportPreset] = {}
-    if not os.path.isdir(EXTERNAL_PRESETS_DIR):
-        return presets
-
-    for filename in sorted(os.listdir(EXTERNAL_PRESETS_DIR)):
-        if not filename.lower().endswith(".json"):
+    candidate_dirs = [
+        os.path.join(REPO_ROOT, "export_presets"),
+        os.path.join(REPO_ROOT, "dev", "export_presets"),
+        os.path.join(REPO_ROOT, "prod", "export_presets"),
+    ]
+    for pdir in candidate_dirs:
+        if not os.path.isdir(pdir):
             continue
-        path = os.path.join(EXTERNAL_PRESETS_DIR, filename)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError("Preset JSON måste vara ett objekt.")
-            preset = _preset_from_dict(data, source="json", source_path=path)
-            presets[preset.preset_id] = preset
-        except Exception as e:
-            print(f"VARNING: kunde inte läsa exportpreset {path}: {e}")
+        for filename in sorted(os.listdir(pdir)):
+            if not filename.lower().endswith(".json"):
+                continue
+            path = os.path.join(pdir, filename)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("Preset JSON måste vara ett objekt.")
+                preset = _preset_from_dict(data, source="json", source_path=path)
+                presets[preset.preset_id] = preset
+            except Exception as e:
+                print(f"VARNING: kunde inte läsa exportpreset {path}: {e}")
     return presets
 
 

@@ -101,17 +101,9 @@ def main():
     check_secrets(repo_root)
 
     env = choose_environment()
-    target_dir = repo_root / env
+    print(f"\n-> Uruchamianie Artportalen enrich (profil: {env.upper()})\n")
 
-    if not target_dir.exists():
-        print(f"Błąd: Katalog {target_dir} nie istnieje!")
-        sys.exit(1)
-
-    print(f"\n-> Uruchamianie wersji: {env.upper()} ({target_dir})\n")
-
-    # Dodaj wybrany katalog (dev lub prod) na początek sys.path
-    sys.path.insert(0, str(target_dir))
-    os.chdir(str(target_dir))
+    sys.path.insert(0, str(repo_root))
 
     try:
         from artportalen_enrich.pipeline import main as pipeline_main

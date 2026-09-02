@@ -182,14 +182,12 @@ def find_minskande_faglar_file() -> Optional[str]:
     import glob
     import os
     try:
-        from .config import REPO_ROOT, SCRIPT_DIR
+        from .config import REPO_ROOT
     except Exception:
         REPO_ROOT = os.getcwd()
-        SCRIPT_DIR = os.getcwd()
 
     search_dirs = [
         REPO_ROOT,
-        SCRIPT_DIR,
         os.getcwd(),
     ]
     seen = set()

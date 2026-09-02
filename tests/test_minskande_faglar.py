@@ -6,21 +6,17 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "dev"))
-from artportalen_enrich.species_helpers import is_minskande_fagel as dev_is_minskande
-from artportalen_enrich.species_helpers import load_minskande_faglar as dev_load
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-sys.path.insert(0, str(REPO_ROOT / "prod"))
-from artportalen_enrich.species_helpers import is_minskande_fagel as prod_is_minskande
-from artportalen_enrich.species_helpers import load_minskande_faglar as prod_load
+from artportalen_enrich.species_helpers import is_minskande_fagel, load_minskande_faglar
 
 
 class TestMinskandeFaglar(unittest.TestCase):
 
     def setUp(self):
         self.checkers = [
-            ("dev", dev_is_minskande, dev_load),
-            ("prod", prod_is_minskande, prod_load),
+            ("engine", is_minskande_fagel, load_minskande_faglar),
         ]
         self.expected_species = [
             "bergand",
