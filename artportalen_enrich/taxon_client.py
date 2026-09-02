@@ -3,13 +3,19 @@
 
 from typing import Any, Dict, Optional
 
+from .cache import default_cache
 from .config import TAXON_NAME_URL
 from .http_client import default_client
 from .logger_utils import log
 from .utils import clean_scientific, clean_swedish, json_safe
 
 
-def query_taxon_id_by_name(name: str, field: str) -> int:
+def query_taxon_id_by_name(name: str, field: str, force_refresh: bool = False) -> int:
+    cache_ident = f"{field}:{name}".strip().lower()
+    cached_id = default_cache.get("taxon_name", cache_ident, force_refresh=force_refresh)
+    if cached_id is not None:
+        return int(cached_id)
+
     params = {
         "searchString": name,
         "searchFields": field,
@@ -35,6 +41,7 @@ def query_taxon_id_by_name(name: str, field: str) -> int:
         ti = item.get("taxonInformation", {}) or {}
         return int(ti.get("taxonId", 0) or 0)
 
+    matched_id = 0
     exact = [
         d for d in data
         if any((
@@ -44,13 +51,17 @@ def query_taxon_id_by_name(name: str, field: str) -> int:
         ))
     ]
     if exact:
-        return _pick_id(exact[0])
+        matched_id = _pick_id(exact[0])
+    elif any(d.get("isRecommended") is True for d in data):
+        recommended = [d for d in data if d.get("isRecommended") is True]
+        matched_id = _pick_id(recommended[0])
+    else:
+        matched_id = _pick_id(data[0])
 
-    recommended = [d for d in data if d.get("isRecommended") is True]
-    if recommended:
-        return _pick_id(recommended[0])
+    if matched_id > 0:
+        default_cache.set("taxon_name", cache_ident, matched_id)
 
-    return _pick_id(data[0])
+    return matched_id
 
 
 def resolve_taxon_id(row: Dict[str, Any], sv_col: Optional[str], sci_col: Optional[str]) -> int:

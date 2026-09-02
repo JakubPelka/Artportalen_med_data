@@ -205,15 +205,17 @@ def main() -> None:
     input_result = read_input_file(paths["INPUT_FILE"], paths.get("INPUT_SOURCE", "auto"))
     df = ensure_taxon_id(input_result.dataframe, input_result.columns)
 
-    uniq_ids = unique_taxon_ids(df)
-
     fetch_tls_definitions()
     if tls_definitions_ready():
         tls_build_memberships()
     else:
         log("TLS: /definitions niedostępne — użyję tylko fallbacków z SpeciesDataService.")
 
-    result = build_enrichment_table(uniq_ids)
+    refresh_cache = bool(paths.get("REFRESH_CACHE", False)) or os.getenv("ARTPORTALEN_REFRESH_CACHE", "0").strip().lower() in {"1", "true", "yes"}
+    if refresh_cache:
+        log("Tryb odświeżania cache: wymuszam pobranie świeżych danych z API.")
+
+    result = build_enrichment_table(uniq_ids, force_refresh=refresh_cache)
     full_enriched = make_full_enriched(df, result)
 
     if paths["WANT_FULL"]:

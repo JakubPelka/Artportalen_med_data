@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
+from .cache import default_cache
 from .config import RL_ORDER, SPECIES_SLEEP, SPECIES_URL
 from .http_client import default_client
 from .logger_utils import add_debug_row, is_debug, log
@@ -185,17 +186,29 @@ def _new_record() -> Dict[str, Any]:
     return {c: "" for c in DATA_COLUMNS}
 
 
-def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Hämtar och tolkar SpeciesDataService för ett TaxonId."""
+def fetch_species_record(
+    tid: int,
+    index: int = 1,
+    total: int = 1,
+    force_refresh: bool = False,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Hämtar och tolkar SpeciesDataService för ett TaxonId (z obsługą cache SQLite)."""
     record = _new_record()
     dbg: Dict[str, Any] = {"TaxonId": tid}
 
     try:
-        resp = default_client.get_species(
-            SPECIES_URL,
-            params={"taxa": tid, "culture": "sv-SE"},
-        )
-        data = json_safe(resp) if resp and resp.status_code == 200 else []
+        cached_data = default_cache.get("species_data", tid, culture="sv_SE", force_refresh=force_refresh)
+        if cached_data is not None:
+            data = cached_data
+        else:
+            resp = default_client.get_species(
+                SPECIES_URL,
+                params={"taxa": tid, "culture": "sv-SE"},
+            )
+            data = json_safe(resp) if resp and resp.status_code == 200 else []
+            if resp and resp.status_code == 200 and data:
+                default_cache.set("species_data", tid, data, culture="sv_SE")
+
         item = (data[0] if isinstance(data, list) and data else data) or {}
         obj = item.get("speciesData", item) or {}
 
@@ -437,13 +450,13 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
     return record, dbg
 
 
-def build_enrichment_table(uniq_ids: List[int]) -> pd.DataFrame:
+def build_enrichment_table(uniq_ids: List[int], force_refresh: bool = False) -> pd.DataFrame:
     store = {c: [] for c in DATA_COLUMNS}
     id_bucket = []
 
     for k, tid in enumerate(uniq_ids, start=1):
         log(f"— {k}/{len(uniq_ids)} — TaxonId={tid}")
-        record, dbg = fetch_species_record(tid, k, len(uniq_ids))
+        record, dbg = fetch_species_record(tid, k, len(uniq_ids), force_refresh=force_refresh)
 
         id_bucket.append(tid)
         for c in DATA_COLUMNS:

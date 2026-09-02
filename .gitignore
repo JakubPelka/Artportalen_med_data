@@ -1,5 +1,7 @@
 /secrets
 /results
+/.cache
+*.sqlite
 __pycache__/
 *.pyc
 .venv/
