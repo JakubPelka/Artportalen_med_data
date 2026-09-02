@@ -27,7 +27,6 @@ from .processing import (
 from .risk_merge import optional_merge_risk_file
 from .taxon_client import resolve_taxon_id
 from .tls_client import fetch_tls_definitions, tls_build_memberships, tls_definitions_ready
-from .ui import pick_inputs
 
 
 def _as_clean_text(value: object) -> str:
@@ -176,16 +175,19 @@ def write_excel(path: str, df: pd.DataFrame) -> None:
     log(f"Zapisano: {path}")
 
 
-def main() -> None:
-    paths = pick_inputs()
-
+def run_pipeline(
+    paths: Dict[str, Any],
+    progress_callback: Optional[Any] = None,
+    cancel_event: Optional[Any] = None,
+) -> None:
+    """Główna funkcja wykonawcza pipeline enrichmentu."""
     try:
         if os.path.exists(paths["LOG_FILE"]):
             os.remove(paths["LOG_FILE"])
     except Exception:
         pass
 
-    configure_logging(paths["LOG_FILE"], bool(paths["DEBUG"]))
+    configure_logging(paths["LOG_FILE"], bool(paths.get("DEBUG", False)))
 
     log(f"Plik wejściowy: {paths['INPUT_FILE']}")
     log(f"Deklarowany typ wejścia: {paths.get('INPUT_SOURCE', 'auto')}")
@@ -202,8 +204,13 @@ def main() -> None:
         f"IAS_Union_EU={'tak' if preset.include_ias_union_eu_filter else 'nie'}."
     )
 
+    if progress_callback:
+        progress_callback(0, 100, "Wczytywanie pliku wejściowego...")
+
     input_result = read_input_file(paths["INPUT_FILE"], paths.get("INPUT_SOURCE", "auto"))
     df = ensure_taxon_id(input_result.dataframe, input_result.columns)
+
+    uniq_ids = unique_taxon_ids(df)
 
     fetch_tls_definitions()
     if tls_definitions_ready():
@@ -215,10 +222,25 @@ def main() -> None:
     if refresh_cache:
         log("Tryb odświeżania cache: wymuszam pobranie świeżych danych z API.")
 
-    result = build_enrichment_table(uniq_ids, force_refresh=refresh_cache)
+    if progress_callback:
+        progress_callback(10, 100, f"Pobieranie danych dla {len(uniq_ids)} unikalnych taksonów...")
+
+    max_workers = paths.get("MAX_WORKERS")
+    result = build_enrichment_table(
+        uniq_ids,
+        force_refresh=refresh_cache,
+        max_workers=max_workers,
+        progress_callback=lambda cur, tot, msg: progress_callback(
+            10 + int((cur / max(1, tot)) * 70), 100, f"{cur}/{tot} taksonów — {msg}"
+        ) if progress_callback else None,
+        cancel_event=cancel_event,
+    )
     full_enriched = make_full_enriched(df, result)
 
-    if paths["WANT_FULL"]:
+    if progress_callback:
+        progress_callback(85, 100, "Zapisywanie plików Excel...")
+
+    if paths.get("WANT_FULL", False):
         full_sorted = sort_by_redlist(full_enriched)
         write_excel(paths["OUT_FULL"], full_sorted)
 
@@ -244,4 +266,12 @@ def main() -> None:
 
     optional_merge_risk_file(os.path.dirname(paths["INPUT_FILE"]), paths["OUT_WITH"])
 
+    if progress_callback:
+        progress_callback(100, 100, "Zakończono pomyślnie!")
+
     log("Proces zakończony sukcesem!")
+
+
+def main() -> None:
+    from .ui import launch_gui
+    launch_gui(run_pipeline)

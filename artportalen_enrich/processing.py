@@ -454,17 +454,24 @@ def build_enrichment_table(
     uniq_ids: List[int],
     force_refresh: bool = False,
     max_workers: Optional[int] = None,
+    progress_callback: Optional[Any] = None,
+    cancel_event: Optional[Any] = None,
 ) -> pd.DataFrame:
     """Buduje tabelę enrichmentu dla unikalnych TaxonId (sekwencyjnie lub wielowątkowo)."""
     store = {c: [] for c in DATA_COLUMNS}
     id_bucket = []
 
     workers = DEFAULT_MAX_WORKERS if max_workers is None else int(max_workers)
+    total_taxa = len(uniq_ids)
 
-    if workers <= 1 or len(uniq_ids) <= 1:
+    if workers <= 1 or total_taxa <= 1:
         for k, tid in enumerate(uniq_ids, start=1):
-            log(f"— {k}/{len(uniq_ids)} — TaxonId={tid}")
-            record, dbg = fetch_species_record(tid, k, len(uniq_ids), force_refresh=force_refresh)
+            if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+                log("Anulowanie żądane przez użytkownika.")
+                raise RuntimeError("Operacja została anulowana przez użytkownika.")
+
+            log(f"— {k}/{total_taxa} — TaxonId={tid}")
+            record, dbg = fetch_species_record(tid, k, total_taxa, force_refresh=force_refresh)
 
             id_bucket.append(tid)
             for c in DATA_COLUMNS:
@@ -473,17 +480,28 @@ def build_enrichment_table(
             if is_debug():
                 add_debug_row(dbg)
 
+            if progress_callback:
+                try:
+                    progress_callback(k, total_taxa, f"Pobrano {k}/{total_taxa} taksonów")
+                except Exception:
+                    pass
+
             time.sleep(SPECIES_SLEEP)
     else:
         import concurrent.futures
-        log(f"Uruchamiam pobieranie danych dla {len(uniq_ids)} taksonów z {workers} wątkami roboczymi.")
+        log(f"Uruchamiam pobieranie danych dla {total_taxa} taksonów z {workers} wątkami roboczymi.")
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_tid = {
-                tid: executor.submit(fetch_species_record, tid, k, len(uniq_ids), force_refresh=force_refresh)
+                tid: executor.submit(fetch_species_record, tid, k, total_taxa, force_refresh=force_refresh)
                 for k, tid in enumerate(uniq_ids, start=1)
             }
             # Odbiór w DOKŁADNEJ kolejności wejściowej uniq_ids dla 100% determinizmu
-            for tid in uniq_ids:
+            for k, tid in enumerate(uniq_ids, start=1):
+                if cancel_event and getattr(cancel_event, "is_set", lambda: False)():
+                    log("Anulowanie żądane przez użytkownika.")
+                    executor.shutdown(wait=False)
+                    raise RuntimeError("Operacja została anulowana przez użytkownika.")
+
                 record, dbg = future_to_tid[tid].result()
                 id_bucket.append(tid)
                 for c in DATA_COLUMNS:
@@ -491,6 +509,12 @@ def build_enrichment_table(
 
                 if is_debug():
                     add_debug_row(dbg)
+
+                if progress_callback:
+                    try:
+                        progress_callback(k, total_taxa, f"Pobrano {k}/{total_taxa} taksonów")
+                    except Exception:
+                        pass
 
     result = pd.DataFrame({"TaxonId": id_bucket}) if id_bucket else pd.DataFrame(columns=["TaxonId"])
     for c in DATA_COLUMNS:

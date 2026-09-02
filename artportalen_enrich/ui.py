@@ -1,16 +1,28 @@
 # -*- coding: utf-8 -*-
-"""Tkinter UI: val av inputfil, outputmapp, exportprofil och körningslägen."""
+"""
+Nowoczesne jednoramkowe GUI (Tkinter/ttk) dla Artportalen_med_data (Issue #9).
+
+Główne cechy:
+- Pojedyncze, przejrzyste okno ze wszystkimi opcjami (brak irytujących serii popupów).
+- Dedykowany worker thread chroniący interfejs przed zawieszaniem.
+- Pasek postępu, status operacji i przewijana konsola logów na żywo.
+- Obsługa bezpiecznego anulowania (Cancel) bez uszkadzania plików.
+- Pełna integracja z presetami i edytorem JSON.
+"""
 
 import os
+import queue
 import sys
-from typing import Any, Dict, Optional, Tuple
+import threading
+import time
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from .config import DEFAULT_MAX_WORKERS, REPO_ROOT
 from .export_presets import (
-    CORE_INPUT_COLUMNS,
     EXTERNAL_PRESETS_DIR,
     get_default_preset_id,
     get_known_export_columns,
@@ -18,10 +30,8 @@ from .export_presets import (
     list_presets,
     preset_summary_text,
     save_custom_preset,
-    save_preset_copy,
 )
-
-REDLIST_CHOICES = ("RE", "CR", "EN", "VU", "NT", "DD", "LC", "NA", "NE")
+from .logger_utils import add_log_listener, remove_log_listener
 
 
 def _center_window(win: tk.Toplevel, width: int = 760, height: int = 600) -> None:
@@ -33,489 +43,429 @@ def _center_window(win: tk.Toplevel, width: int = 760, height: int = 600) -> Non
     win.geometry(f"{width}x{height}+{x}+{y}")
 
 
-def _bring_to_front(win: tk.Toplevel) -> None:
-    try:
-        win.lift()
-        win.attributes("-topmost", True)
-        win.after_idle(win.attributes, "-topmost", False)
-        win.focus_force()
-    except Exception:
-        pass
-
-
-def _show_preset_preview(root: tk.Tk, preset_id: str) -> None:
-    win = tk.Toplevel(root)
+def _show_preset_preview(parent: tk.Misc, preset_id: str) -> None:
+    win = tk.Toplevel(parent)
     win.title(f"Podgląd profilu eksportu: {preset_id}")
     win.geometry("700x520")
     win.minsize(560, 360)
     win.grab_set()
 
-    outer = tk.Frame(win, padx=12, pady=12)
+    outer = ttk.Frame(win, padding=12)
     outer.pack(fill="both", expand=True)
 
-    text = ScrolledText(outer, wrap="word", height=20)
+    text = ScrolledText(outer, wrap="word", height=20, font=("TkFixedFont", 10))
     text.pack(fill="both", expand=True, pady=(0, 10))
     text.insert("1.0", preset_summary_text(preset_id))
     text.configure(state="disabled")
 
-    btn = tk.Button(outer, text="Zamknij", command=win.destroy, width=14)
+    btn = ttk.Button(outer, text="Zamknij", command=win.destroy, width=14)
     btn.pack(side="right")
 
     _center_window(win, 700, 520)
-    _bring_to_front(win)
-    root.wait_window(win)
 
 
-def _show_preset_editor(root: tk.Tk, preset_id: str) -> Tuple[Optional[str], Optional[str]]:
-    """Edytor profilu eksportu: pozwala włączyć/wyłączyć kolumny i filtry."""
+def _show_preset_editor(parent: tk.Misc, preset_id: str) -> Optional[str]:
+    """Edytor profilu eksportu z możliwością tworzenia własnych konfiguracji kolumn."""
     base = get_preset(preset_id)
-    result: dict[str, str | None] = {"preset_id": None, "path": None}
+    saved_preset_id = [None]
 
-    win = tk.Toplevel(root)
-    win.title("Edytuj preset / skapa JSON-preset")
-    win.geometry("900x720")
-    win.minsize(760, 560)
+    win = tk.Toplevel(parent)
+    win.title(f"Edytuj profil: {base.label}")
+    win.geometry("860x680")
+    win.minsize(700, 500)
     win.grab_set()
 
-    outer = tk.Frame(win, padx=12, pady=10)
+    outer = ttk.Frame(win, padding=12)
     outer.pack(fill="both", expand=True)
 
-    info = tk.Label(
+    header = ttk.Label(
         outer,
-        text=(
-            "Edytujesz kopię aktualnego presetu. Po zapisie powstanie nowy plik JSON w "
-            "dev/export_presets albo prod/export_presets. Kolejność kolumn jest stała, "
-            "zgodna z kolejnością techniczną skryptu."
-        ),
-        justify="left",
-        anchor="w",
-        wraplength=850,
+        text="Utwórz lub zmodyfikuj niestandardowy profil eksportu JSON.",
+        font=("TkDefaultFont", 10, "bold"),
     )
-    info.pack(fill="x", pady=(0, 8))
+    header.pack(fill="x", pady=(0, 6))
 
-    meta_frame = tk.Frame(outer)
-    meta_frame.pack(fill="x", pady=(0, 8))
+    meta_frame = ttk.Frame(outer)
+    meta_frame.pack(fill="x", pady=(0, 10))
 
-    tk.Label(meta_frame, text="Nazwa presetu:", anchor="w").grid(row=0, column=0, sticky="w")
-    label_var = tk.StringVar(master=win, value=f"Kopia av {base.label}")
-    tk.Entry(meta_frame, textvariable=label_var, width=80).grid(row=0, column=1, sticky="ew", padx=(8, 0))
-    meta_frame.columnconfigure(1, weight=1)
+    ttk.Label(meta_frame, text="Nazwa profilu:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+    label_var = tk.StringVar(value=f"{base.label} (Własny)")
+    ttk.Entry(meta_frame, textvariable=label_var, width=40).grid(row=0, column=1, sticky="w", padx=4, pady=2)
 
-    tk.Label(outer, text="Opis:", anchor="w").pack(fill="x")
-    desc = tk.Text(outer, height=4, wrap="word")
-    desc.pack(fill="x", pady=(0, 8))
-    desc.insert("1.0", base.description or "")
+    ttk.Label(meta_frame, text="ID profilu:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+    id_var = tk.StringVar(value=f"{base.preset_id}_custom")
+    ttk.Entry(meta_frame, textvariable=id_var, width=40).grid(row=1, column=1, sticky="w", padx=4, pady=2)
 
-    options = tk.Frame(outer, relief="groove", bd=1, padx=8, pady=8)
-    options.pack(fill="x", pady=(0, 8))
+    ttk.Label(meta_frame, text="Opis:").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+    desc_var = tk.StringVar(value=base.description)
+    ttk.Entry(meta_frame, textvariable=desc_var, width=40).grid(row=2, column=1, sticky="w", padx=4, pady=2)
 
-    include_all_var = tk.BooleanVar(master=win, value=bool(base.include_all_columns))
-    include_original_var = tk.BooleanVar(master=win, value=bool(base.include_original_columns))
-    include_current_var = tk.BooleanVar(master=win, value=bool(base.include_current_protection_filter))
-    include_redlist_var = tk.BooleanVar(master=win, value=bool(base.include_redlist_filter))
-    include_ias_var = tk.BooleanVar(master=win, value=bool(base.include_ias_union_eu_filter))
+    # Kolumny
+    cols_frame = ttk.LabelFrame(outer, text="Wybór kolumn wzbogacenia", padding=8)
+    cols_frame.pack(fill="both", expand=True, pady=(0, 10))
 
-    tk.Checkbutton(options, text="Eksportuj wszystkie kolumny (ignoruje listę kolumn poniżej)", variable=include_all_var).grid(row=0, column=0, sticky="w", columnspan=3)
-    tk.Checkbutton(options, text="Zachowaj oryginalne kolumny z Artportalen", variable=include_original_var).grid(row=1, column=0, sticky="w", columnspan=3)
-    tk.Checkbutton(options, text="Filtr _bara_skyddade: obecne flagi ochronne/naturvårdsflaggor", variable=include_current_var).grid(row=2, column=0, sticky="w", columnspan=3)
-    tk.Checkbutton(options, text="Filtr _bara_skyddade: rödlistning", variable=include_redlist_var).grid(row=3, column=0, sticky="w")
-    tk.Checkbutton(options, text="Filtr _bara_skyddade: IAS_Union_EU", variable=include_ias_var).grid(row=4, column=0, sticky="w", columnspan=3)
+    cols_canvas = tk.Canvas(cols_frame, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(cols_frame, orient="vertical", command=cols_canvas.yview)
+    scroll_frame = ttk.Frame(cols_canvas)
 
-    red_frame = tk.Frame(options)
-    red_frame.grid(row=3, column=1, sticky="w", padx=(12, 0))
-    red_vars: Dict[str, tk.BooleanVar] = {}
-    selected_red = {str(x).upper() for x in base.redlist_categories}
-    for i, cat in enumerate(REDLIST_CHOICES):
-        var = tk.BooleanVar(master=win, value=cat in selected_red)
-        red_vars[cat] = var
-        tk.Checkbutton(red_frame, text=cat, variable=var).grid(row=0, column=i, sticky="w")
+    scroll_frame.bind("<Configure>", lambda e: cols_canvas.configure(scrollregion=cols_canvas.bbox("all")))
+    cols_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+    cols_canvas.configure(yscrollcommand=scrollbar.set)
 
-    columns_outer = tk.LabelFrame(outer, text="Kolumny w presecie", padx=8, pady=8)
-    columns_outer.pack(fill="both", expand=True)
-
-    column_buttons = tk.Frame(columns_outer)
-    column_buttons.pack(fill="x", pady=(0, 6))
-
-    canvas = tk.Canvas(columns_outer, highlightthickness=0)
-    scrollbar = tk.Scrollbar(columns_outer, orient="vertical", command=canvas.yview)
-    scroll_frame = tk.Frame(canvas)
-
-    scroll_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
-    )
-    canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
+    cols_canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
 
-    known_columns = get_known_export_columns()
-    base_columns = set(base.enrichment_columns)
-    if base.include_all_columns:
-        base_columns = set(known_columns)
-
+    all_cols = get_known_export_columns()
     col_vars: Dict[str, tk.BooleanVar] = {}
-    for idx, col in enumerate(known_columns):
-        var = tk.BooleanVar(master=win, value=col in base_columns)
+
+    for i, col in enumerate(all_cols):
+        var = tk.BooleanVar(value=base.include_all_columns or (col in base.enrichment_columns))
         col_vars[col] = var
-        r = idx // 2
-        c = idx % 2
-        tk.Checkbutton(scroll_frame, text=col, variable=var, anchor="w", justify="left").grid(row=r, column=c, sticky="w", padx=(0, 20), pady=1)
+        r = i // 2
+        c = i % 2
+        cb = ttk.Checkbutton(scroll_frame, text=col, variable=var)
+        cb.grid(row=r, column=c, sticky="w", padx=10, pady=2)
 
-    def select_all_columns() -> None:
-        for var in col_vars.values():
-            var.set(True)
-
-    def clear_columns() -> None:
-        for var in col_vars.values():
-            var.set(False)
-
-    def select_invasive_columns() -> None:
-        invasive_tokens = ("Frammande", "IAS_Union_EU", "Risklista", "AlienSpecies")
-        for col, var in col_vars.items():
-            if any(token in col for token in invasive_tokens) or col in {"TaxonId", "ScientificName", "SwedishName", "DisplayName", "Category"}:
-                var.set(True)
-
-    tk.Button(column_buttons, text="Välj alla kolumner", command=select_all_columns, width=18).pack(side="left")
-    tk.Button(column_buttons, text="Avmarkera alla", command=clear_columns, width=16).pack(side="left", padx=(8, 0))
-    tk.Button(column_buttons, text="Välj invasiva/främmande", command=select_invasive_columns, width=22).pack(side="left", padx=(8, 0))
-
-    buttons = tk.Frame(outer)
-    buttons.pack(fill="x", pady=(10, 0))
-
-    def save() -> None:
-        label = label_var.get().strip()
-        if not label:
-            messagebox.showerror("Brak nazwy", "Podaj nazwę presetu.", parent=win)
+    def on_save():
+        new_id = id_var.get().strip().lower()
+        new_label = label_var.get().strip()
+        new_desc = desc_var.get().strip()
+        if not new_id or not new_label:
+            messagebox.showerror("Błąd", "ID i Nazwa profilu nie mogą być puste.", parent=win)
             return
 
-        columns = [col for col, var in col_vars.items() if var.get()]
-        red_categories = [cat for cat, var in red_vars.items() if var.get()]
-        data = {
-            "label": label,
-            "description": desc.get("1.0", "end").strip(),
-            "include_all_columns": bool(include_all_var.get()),
-            "include_original_columns": bool(include_original_var.get()),
-            "original_column_candidates": list(CORE_INPUT_COLUMNS),
-            "enrichment_columns": columns,
-            "filter": {
-                "include_current_protection_filter": bool(include_current_var.get()),
-                "include_redlist_filter": bool(include_redlist_var.get()),
-                "redlist_categories": red_categories,
-                "include_ias_union_eu_filter": bool(include_ias_var.get()),
-            },
-        }
+        selected_cols = [col for col, v in col_vars.items() if v.get()]
+        if not selected_cols:
+            messagebox.showerror("Błąd", "Wybierz co najmniej jedną kolumnę.", parent=win)
+            return
+
         try:
-            new_id, path = save_custom_preset(data)
-            result["preset_id"] = new_id
-            result["path"] = path
-            messagebox.showinfo("Preset sparad", f"Preset zapisany jako JSON:\n\n{path}", parent=win)
+            save_custom_preset(
+                preset_id=new_id,
+                label=new_label,
+                description=new_desc,
+                enrichment_columns=tuple(selected_cols),
+                include_all_columns=False,
+                include_current_protection_filter=base.include_current_protection_filter,
+                include_redlist_filter=base.include_redlist_filter,
+                redlist_categories=base.redlist_categories,
+            )
+            saved_preset_id[0] = new_id
+            messagebox.showinfo("Sukces", f"Zapisano profil '{new_label}' w {EXTERNAL_PRESETS_DIR}", parent=win)
             win.destroy()
         except Exception as e:
-            messagebox.showerror("Błąd zapisu presetu", str(e), parent=win)
+            messagebox.showerror("Błąd zapisu", str(e), parent=win)
 
-    def cancel() -> None:
-        win.destroy()
+    btn_bar = ttk.Frame(outer)
+    btn_bar.pack(fill="x")
+    ttk.Button(btn_bar, text="Zapisz profil", command=on_save, width=15).pack(side="left")
+    ttk.Button(btn_bar, text="Anuluj", command=win.destroy, width=12).pack(side="right")
 
-    tk.Button(buttons, text="Zapisz jako nowy JSON", command=save, width=22).pack(side="right", padx=(8, 0))
-    tk.Button(buttons, text="Anuluj", command=cancel, width=12).pack(side="right")
-
-    _center_window(win)
-    _bring_to_front(win)
-    root.wait_window(win)
-    return result["preset_id"], result["path"]
+    _center_window(win, 860, 680)
+    parent.wait_window(win)
+    return saved_preset_id[0]
 
 
-def _choose_export_preset(root: tk.Tk) -> str:
-    """Visar dialog för val, preview, editor och sparande av exportprofil."""
-    default_id = get_default_preset_id()
-    selected = tk.StringVar(master=root, value=default_id)
-    description_var = tk.StringVar(master=root, value=get_preset(default_id).description)
-    folder_var = tk.StringVar(master=root, value=f"Presetfolder: {EXTERNAL_PRESETS_DIR}")
-    result = {"preset_id": default_id}
+class ArtportalenGui:
+    """Jedno, nowoczesne okno robocze aplikacji."""
 
-    dialog = tk.Toplevel(root)
-    dialog.title("Välj exportprofil")
-    dialog.geometry("760x600")
-    dialog.minsize(680, 520)
+    def __init__(self, root: tk.Tk, run_fn: Optional[Callable[..., Any]] = None):
+        self.root = root
+        self.run_fn = run_fn
+        self.root.title("Artportalen & AGOL Data Enricher (Facelift 2026)")
+        self.root.geometry("860x780")
+        self.root.minsize(760, 620)
 
-    # Viktigt: använd inte enbart transient(root) när root är withdraw(),
-    # eftersom dialogen då kan hamna bakom andra fönster i Windows.
-    dialog.grab_set()
+        self.log_queue: queue.Queue = queue.Queue()
+        self.cancel_event = threading.Event()
+        self.worker_thread: Optional[threading.Thread] = None
 
-    outer = tk.Frame(dialog, padx=14, pady=12)
-    outer.pack(fill="both", expand=True)
+        self._init_variables()
+        self._build_ui()
+        self._setup_logging()
+        self._start_queue_listener()
 
-    title = tk.Label(
-        outer,
-        text=(
-            "Välj vilka kolumner som ska skrivas till _with_data och _bara_skyddade. "
-            "Egna JSON-presets läses från dev/export_presets eller prod/export_presets, "
-            "beroende på vilken version som körs."
-        ),
-        justify="left",
-        anchor="w",
-        wraplength=710,
-    )
-    title.pack(fill="x", pady=(0, 8))
+    def _init_variables(self) -> None:
+        self.input_file_var = tk.StringVar(value="")
+        self.output_dir_var = tk.StringVar(value=os.path.join(REPO_ROOT, "results"))
+        self.source_type_var = tk.StringVar(value=os.getenv("ARTPORTALEN_DEFAULT_INPUT_SOURCE", "auto"))
 
-    folder_label = tk.Label(
-        outer,
-        textvariable=folder_var,
-        justify="left",
-        anchor="w",
-        wraplength=710,
-        fg="#555555",
-    )
-    folder_label.pack(fill="x", pady=(0, 8))
+        default_preset = get_default_preset_id()
+        self.preset_var = tk.StringVar(value=default_preset)
 
-    preset_frame = tk.Frame(outer, relief="groove", bd=1, padx=8, pady=6)
-    preset_frame.pack(fill="both", expand=True)
+        self.want_full_var = tk.BooleanVar(value=True)
+        self.debug_var = tk.BooleanVar(value=False)
+        self.refresh_cache_var = tk.BooleanVar(value=False)
+        self.workers_var = tk.IntVar(value=DEFAULT_MAX_WORKERS)
 
-    def update_description() -> None:
-        description_var.set(get_preset(selected.get()).description)
+        self.status_var = tk.StringVar(value="Gotowy do pracy. Wybierz plik wejściowy i kliknij 'Uruchom'.")
+        self.progress_var = tk.DoubleVar(value=0.0)
 
-    def rebuild_preset_buttons() -> None:
-        for child in preset_frame.winfo_children():
-            child.destroy()
+    def _build_ui(self) -> None:
+        main_container = ttk.Frame(self.root, padding=14)
+        main_container.pack(fill="both", expand=True)
 
-        presets = list_presets()
-        available_ids = {p.preset_id for p in presets}
-        if selected.get() not in available_ids:
-            selected.set(default_id)
+        # 1. Nagłówek
+        header_frame = ttk.Frame(main_container)
+        header_frame.pack(fill="x", pady=(0, 10))
+        ttk.Label(
+            header_frame,
+            text="Artportalen & AGOL Data Enricher",
+            font=("TkDefaultFont", 14, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            header_frame,
+            text="Automatyczne wzbogacanie obserwacji przyrodniczych o statusy ochrony, czerwoną listę i konwencje.",
+            font=("TkDefaultFont", 9),
+        ).pack(anchor="w")
 
-        for preset in presets:
-            source_suffix = ""
-            if preset.source == "json":
-                source_suffix = "  [JSON]"
-            rb = tk.Radiobutton(
-                preset_frame,
-                text=f"{preset.label}{source_suffix}",
-                variable=selected,
-                value=preset.preset_id,
-                command=update_description,
-                anchor="w",
-                justify="left",
-                wraplength=690,
-            )
-            rb.pack(fill="x", anchor="w")
-        update_description()
+        # 2. Pliki i ścieżki
+        files_frame = ttk.LabelFrame(main_container, text="Pliki i katalogi", padding=10)
+        files_frame.pack(fill="x", pady=(0, 10))
 
-    rebuild_preset_buttons()
+        ttk.Label(files_frame, text="Plik wejściowy:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(files_frame, textvariable=self.input_file_var, width=54).grid(row=0, column=1, sticky="we", padx=4, pady=4)
+        ttk.Button(files_frame, text="Przeglądaj...", command=self._browse_input).grid(row=0, column=2, padx=4, pady=4)
 
-    desc = tk.Label(
-        outer,
-        textvariable=description_var,
-        justify="left",
-        anchor="w",
-        wraplength=710,
-        relief="groove",
-        padx=8,
-        pady=6,
-    )
-    desc.pack(fill="x", pady=(10, 8))
+        ttk.Label(files_frame, text="Folder wyjściowy:").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(files_frame, textvariable=self.output_dir_var, width=54).grid(row=1, column=1, sticky="we", padx=4, pady=4)
+        ttk.Button(files_frame, text="Wybierz folder...", command=self._browse_output).grid(row=1, column=2, padx=4, pady=4)
+        files_frame.columnconfigure(1, weight=1)
 
-    tool_buttons = tk.Frame(outer)
-    tool_buttons.pack(fill="x", pady=(0, 10))
+        # 3. Konfiguracja i profil eksportu
+        config_frame = ttk.LabelFrame(main_container, text="Konfiguracja eksportu", padding=10)
+        config_frame.pack(fill="x", pady=(0, 10))
 
-    def preview() -> None:
-        _show_preset_preview(root, selected.get())
+        # Typ wejścia
+        source_frame = ttk.Frame(config_frame)
+        source_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(source_frame, text="Format danych:").pack(side="left", padx=(0, 10))
+        ttk.Radiobutton(source_frame, text="Auto-detect", variable=self.source_type_var, value="auto").pack(side="left", padx=6)
+        ttk.Radiobutton(source_frame, text="Artportalen", variable=self.source_type_var, value="artportalen").pack(side="left", padx=6)
+        ttk.Radiobutton(source_frame, text="AGOL / generic", variable=self.source_type_var, value="agol").pack(side="left", padx=6)
 
-    def save_copy() -> None:
-        current = get_preset(selected.get())
-        name = simpledialog.askstring(
-            "Spara egen preset",
-            "Namn för ny preset JSON:\n\n"
-            "Preset sparas i dev/export_presets eller prod/export_presets beroende på var skrypt startas.",
-            initialvalue=f"Kopia av {current.label}",
-            parent=dialog,
+        # Preset
+        preset_row = ttk.Frame(config_frame)
+        preset_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(preset_row, text="Profil eksportu:").pack(side="left", padx=(0, 10))
+
+        self.preset_combo = ttk.Combobox(
+            preset_row,
+            textvariable=self.preset_var,
+            state="readonly",
+            width=32,
         )
-        if not name:
-            return
-        try:
-            new_id, path = save_preset_copy(selected.get(), name)
-            selected.set(new_id)
-            rebuild_preset_buttons()
-            messagebox.showinfo(
-                "Preset sparad",
-                f"Preset zapisany jako JSON:\n\n{path}\n\nMożesz edytować ten plik ręcznie i uruchomić skrypt ponownie.",
-                parent=dialog,
-            )
-        except Exception as e:
-            messagebox.showerror("Błąd zapisu presetu", str(e), parent=dialog)
+        self._refresh_presets_list()
+        self.preset_combo.pack(side="left", padx=(0, 8))
 
-    def edit_preset() -> None:
-        new_id, path = _show_preset_editor(root, selected.get())
+        ttk.Button(preset_row, text="Podgląd", command=self._preview_preset, width=10).pack(side="left", padx=4)
+        ttk.Button(preset_row, text="Nowy / Edytor", command=self._edit_preset, width=14).pack(side="left", padx=4)
+
+        # Opcje
+        opts_frame = ttk.Frame(config_frame)
+        opts_frame.pack(fill="x")
+        ttk.Checkbutton(opts_frame, text="Pełny eksport (*_full_enriched.xlsx)", variable=self.want_full_var).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(opts_frame, text="Odśwież cache API", variable=self.refresh_cache_var).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(opts_frame, text="Debug CSV", variable=self.debug_var).pack(side="left", padx=(0, 12))
+
+        ttk.Label(opts_frame, text="Wątki:").pack(side="left", padx=(10, 4))
+        workers_combo = ttk.Combobox(
+            opts_frame,
+            textvariable=self.workers_var,
+            values=[1, 2, 4, 8],
+            width=4,
+            state="readonly",
+        )
+        workers_combo.pack(side="left")
+
+        # 4. Pasek postępu i status
+        prog_frame = ttk.LabelFrame(main_container, text="Stan operacji", padding=10)
+        prog_frame.pack(fill="x", pady=(0, 10))
+
+        self.progress_bar = ttk.Progressbar(prog_frame, variable=self.progress_var, maximum=100.0)
+        self.progress_bar.pack(fill="x", pady=(0, 4))
+
+        self.status_label = ttk.Label(prog_frame, textvariable=self.status_var, font=("TkDefaultFont", 9))
+        self.status_label.pack(anchor="w")
+
+        # 5. Konsola logów
+        log_frame = ttk.LabelFrame(main_container, text="Dziennik zdarzeń (Log)", padding=8)
+        log_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        self.log_text = ScrolledText(log_frame, wrap="char", height=12, font=("TkFixedFont", 9))
+        self.log_text.pack(fill="both", expand=True)
+
+        # 6. Przyciski akcji
+        action_frame = ttk.Frame(main_container)
+        action_frame.pack(fill="x")
+
+        self.btn_run = ttk.Button(action_frame, text="Uruchom wzbogacanie", command=self._start_enrichment, width=22)
+        self.btn_run.pack(side="left", padx=(0, 8))
+
+        self.btn_cancel = ttk.Button(action_frame, text="Anuluj", command=self._cancel_enrichment, state="disabled", width=12)
+        self.btn_cancel.pack(side="left", padx=(0, 8))
+
+        ttk.Button(action_frame, text="Wyczyść log", command=self._clear_log, width=12).pack(side="left")
+        ttk.Button(action_frame, text="Zamknij", command=self.root.destroy, width=12).pack(side="right")
+
+    def _refresh_presets_list(self) -> None:
+        presets = list_presets()
+        preset_ids = [p.preset_id for p in presets]
+        self.preset_combo["values"] = preset_ids
+        if self.preset_var.get() not in preset_ids and preset_ids:
+            self.preset_var.set(preset_ids[0])
+
+    def _browse_input(self) -> None:
+        filename = filedialog.askopenfilename(
+            parent=self.root,
+            title="Wybierz plik z obserwacjami",
+            filetypes=[
+                ("Pliki Excel i CSV", "*.xlsx *.xls *.csv"),
+                ("Skoroszyty Excel (*.xlsx)", "*.xlsx"),
+                ("Starszy Excel (*.xls)", "*.xls"),
+                ("Pliki CSV (*.csv)", "*.csv"),
+                ("Wszystkie pliki", "*.*"),
+            ],
+        )
+        if filename:
+            self.input_file_var.set(filename)
+            # Jeśli output_dir jest pusty, zaproponuj ten sam folder
+            if not self.output_dir_var.get():
+                self.output_dir_var.set(os.path.dirname(filename))
+
+    def _browse_output(self) -> None:
+        folder = filedialog.askdirectory(parent=self.root, title="Wybierz folder wyjściowy")
+        if folder:
+            self.output_dir_var.set(folder)
+
+    def _preview_preset(self) -> None:
+        _show_preset_preview(self.root, self.preset_var.get())
+
+    def _edit_preset(self) -> None:
+        new_id = _show_preset_editor(self.root, self.preset_var.get())
         if new_id:
-            selected.set(new_id)
-            rebuild_preset_buttons()
-            messagebox.showinfo(
-                "Preset aktywny",
-                f"Nowy preset został zapisany i wybrany:\n\n{path}",
-                parent=dialog,
-            )
+            self._refresh_presets_list()
+            self.preset_var.set(new_id)
 
-    tk.Button(tool_buttons, text="Podgląd presetu", command=preview, width=18).pack(side="left")
-    tk.Button(tool_buttons, text="Edytuj i zapisz JSON", command=edit_preset, width=22).pack(side="left", padx=(8, 0))
-    tk.Button(tool_buttons, text="Zapisz kopię jako JSON", command=save_copy, width=24).pack(side="left", padx=(8, 0))
+    def _setup_logging(self) -> None:
+        add_log_listener(self.log_queue.put)
 
-    buttons = tk.Frame(outer)
-    buttons.pack(fill="x")
+    def _clear_log(self) -> None:
+        self.log_text.delete("1.0", tk.END)
 
-    def ok() -> None:
-        result["preset_id"] = selected.get()
-        dialog.destroy()
+    def _start_queue_listener(self) -> None:
+        try:
+            while not self.log_queue.empty():
+                msg = self.log_queue.get_nowait()
+                self.log_text.insert(tk.END, msg + "\n")
+                self.log_text.see(tk.END)
+        except Exception:
+            pass
+        self.root.after(100, self._start_queue_listener)
 
-    def cancel() -> None:
-        result["preset_id"] = default_id
-        dialog.destroy()
+    def _start_enrichment(self) -> None:
+        input_file = self.input_file_var.get().strip()
+        out_dir = self.output_dir_var.get().strip()
 
-    tk.Button(buttons, text="OK", command=ok, width=12).pack(side="right", padx=(6, 0))
-    tk.Button(buttons, text="Avbryt / standard", command=cancel, width=18).pack(side="right")
+        if not input_file or not os.path.exists(input_file):
+            messagebox.showerror("Błąd", "Wskaż poprawny, istniejący plik wejściowy.", parent=self.root)
+            return
 
-    dialog.protocol("WM_DELETE_WINDOW", cancel)
-    _center_window(dialog)
-    _bring_to_front(dialog)
+        if not out_dir:
+            out_dir = os.path.dirname(input_file)
+            self.output_dir_var.set(out_dir)
 
-    root.wait_window(dialog)
-    return result["preset_id"]
+        os.makedirs(out_dir, exist_ok=True)
+
+        # Generuj nazwy plików wyjściowych
+        stem, _ = os.path.splitext(os.path.basename(input_file))
+        paths = {
+            "INPUT_FILE": input_file,
+            "INPUT_SOURCE": self.source_type_var.get(),
+            "EXPORT_PRESET": self.preset_var.get(),
+            "OUTDIR": out_dir,
+            "OUT_WITH": os.path.join(out_dir, f"{stem}_med_data.xlsx"),
+            "OUT_FULL": os.path.join(out_dir, f"{stem}_full_enriched.xlsx"),
+            "OUT_PROT": os.path.join(out_dir, f"{stem}_bara_skyddade.xlsx"),
+            "OUT_ALIEN": os.path.join(out_dir, f"{stem}_frammande_invasiva.xlsx"),
+            "LOG_FILE": os.path.join(out_dir, f"{stem}_enrich.log"),
+            "DBG_FILE": os.path.join(out_dir, f"{stem}_debug.csv"),
+            "WANT_FULL": self.want_full_var.get(),
+            "DEBUG": self.debug_var.get(),
+            "REFRESH_CACHE": self.refresh_cache_var.get(),
+            "MAX_WORKERS": self.workers_var.get(),
+        }
+
+        self.cancel_event.clear()
+        self.btn_run.configure(state="disabled")
+        self.btn_cancel.configure(state="normal")
+        self.progress_var.set(0.0)
+        self.status_var.set("Uruchamianie procesu...")
+
+        def _worker():
+            try:
+                if self.run_fn:
+                    self.run_fn(
+                        paths=paths,
+                        progress_callback=self._update_progress,
+                        cancel_event=self.cancel_event,
+                    )
+                else:
+                    from .pipeline import run_pipeline
+                    run_pipeline(
+                        paths=paths,
+                        progress_callback=self._update_progress,
+                        cancel_event=self.cancel_event,
+                    )
+                self.root.after(0, self._on_success, paths["OUT_WITH"])
+            except Exception as e:
+                self.root.after(0, self._on_error, str(e))
+
+        self.worker_thread = threading.Thread(target=_worker, daemon=True)
+        self.worker_thread.start()
+
+    def _cancel_enrichment(self) -> None:
+        self.cancel_event.set()
+        self.status_var.set("Zażądano anulowania... Czekam na zakończenie wątków.")
+        self.btn_cancel.configure(state="disabled")
+
+    def _update_progress(self, current: int, total: int, message: str) -> None:
+        pct = (current / max(1, total)) * 100.0
+        self.root.after(0, lambda: self._apply_progress(pct, message))
+
+    def _apply_progress(self, pct: float, message: str) -> None:
+        self.progress_var.set(pct)
+        self.status_var.set(f"[{int(pct)}%] {message}")
+
+    def _on_success(self, output_file: str) -> None:
+        self.btn_run.configure(state="normal")
+        self.btn_cancel.configure(state="disabled")
+        self.progress_var.set(100.0)
+        self.status_var.set("Proces zakończony sukcesem!")
+        messagebox.showinfo(
+            "Sukces!",
+            f"Wzbogacanie danych zakończone pomyślnie!\n\nWyniki zapisano w folderze:\n{os.path.dirname(output_file)}",
+            parent=self.root,
+        )
+
+    def _on_error(self, err_msg: str) -> None:
+        self.btn_run.configure(state="normal")
+        self.btn_cancel.configure(state="disabled")
+        self.status_var.set(f"Przerwano: {err_msg}")
+        if "anulowana" in err_msg.lower():
+            messagebox.showwarning("Anulowano", "Przetwarzanie zostało anulowane przez użytkownika.", parent=self.root)
+        else:
+            messagebox.showerror("Błąd", f"Wystąpił błąd podczas przetwarzania:\n{err_msg}", parent=self.root)
 
 
-
-def _choose_input_source(root: tk.Tk) -> str:
-    """Dialog wyboru typu wejścia: Auto, Artportalen albo AGOL."""
-    default_source = os.getenv("ARTPORTALEN_DEFAULT_INPUT_SOURCE", "auto").strip().lower()
-    if default_source not in {"auto", "artportalen", "agol"}:
-        default_source = "auto"
-    selected = tk.StringVar(master=root, value=default_source)
-    result = {"source": default_source}
-
-    dialog = tk.Toplevel(root)
-    dialog.title("Välj datakälla / wybierz źródło danych")
-    dialog.geometry("700x360")
-    dialog.minsize(620, 320)
-    dialog.grab_set()
-
-    outer = tk.Frame(dialog, padx=14, pady=12)
-    outer.pack(fill="both", expand=True)
-
-    title = tk.Label(
-        outer,
-        text=(
-            "Wybierz typ pliku wejściowego. Tryb Auto powinien rozpoznać typ po kolumnach, "
-            "ale przy eksporcie z ArcGIS Online możesz jawnie wskazać AGOL."
-        ),
-        justify="left",
-        anchor="w",
-        wraplength=660,
-    )
-    title.pack(fill="x", pady=(0, 10))
-
-    options = [
-        (
-            "auto",
-            "Auto-detect",
-            "Skrypt sam próbuje rozpoznać Artportalen albo AGOL/generic po kolumnach.",
-        ),
-        (
-            "artportalen",
-            "Artportalen export",
-            "Dla oryginalnego eksportu Artportalen. Obsługuje dodatkowe wiersze opisowe przed nagłówkiem.",
-        ),
-        (
-            "agol",
-            "AGOL / ArcGIS Online export",
-            "Dla pliku z AGOL. Nagłówek powinien być w pierwszym wierszu; TaxonId będzie dopasowany po nazwach, jeśli go brakuje.",
-        ),
-    ]
-
-    for value, label, desc in options:
-        frame = tk.Frame(outer, relief="groove", bd=1, padx=8, pady=6)
-        frame.pack(fill="x", pady=4)
-        rb = tk.Radiobutton(frame, text=label, variable=selected, value=value, anchor="w", justify="left")
-        rb.pack(fill="x", anchor="w")
-        tk.Label(frame, text=desc, justify="left", anchor="w", wraplength=630, fg="#555555").pack(fill="x", padx=(24, 0))
-
-    buttons = tk.Frame(outer)
-    buttons.pack(fill="x", pady=(10, 0))
-
-    def ok() -> None:
-        result["source"] = selected.get()
-        dialog.destroy()
-
-    def cancel() -> None:
-        result["source"] = "auto"
-        dialog.destroy()
-
-    tk.Button(buttons, text="OK", command=ok, width=12).pack(side="right", padx=(6, 0))
-    tk.Button(buttons, text="Auto / standard", command=cancel, width=18).pack(side="right")
-
-    dialog.protocol("WM_DELETE_WINDOW", cancel)
-    _center_window(dialog)
-    _bring_to_front(dialog)
-    root.wait_window(dialog)
-    return result["source"]
-
-
-def pick_inputs() -> Dict[str, Any]:
+def launch_gui(run_fn: Optional[Callable[..., Any]] = None) -> None:
     root = tk.Tk()
-    root.withdraw()
-
+    # Użyj nowoczesnego motywu ttk jeśli dostępny
     try:
-        root.attributes("-topmost", True)
+        style = ttk.Style(root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
     except Exception:
         pass
-
-    infile = filedialog.askopenfilename(
-        parent=root,
-        title="Wybierz plik wejściowy: Artportalen albo AGOL",
-        filetypes=[("Excel/CSV", "*.xlsx;*.xls;*.csv;*.tsv"), ("Excel", "*.xlsx;*.xls"), ("CSV/TSV", "*.csv;*.tsv"), ("Wszystkie pliki", "*.*")],
-    )
-    if not infile:
-        root.destroy()
-        sys.exit("Przerwano: nie wybrano pliku wejściowego.")
-
-    outdir = filedialog.askdirectory(parent=root, title="Wybierz folder zapisu wyników")
-    if not outdir:
-        outdir = os.path.dirname(infile)
-
-    base = os.path.splitext(os.path.basename(infile))[0]
-
-    input_source = _choose_input_source(root)
-
-    export_preset = _choose_export_preset(root)
-
-    want_full = messagebox.askyesno(
-        "Dodatkowy plik?",
-        "Czy wygenerować DODATKOWO pełną tabelę BEZ usuwania duplikatów (full_)?",
-        parent=root,
-    )
-
-    want_debug = messagebox.askyesno(
-        "Tryb debug?",
-        "Włączyć DEBUG (szerszy log + tls_debug.csv)?",
-        parent=root,
-    )
-
-    try:
-        root.attributes("-topmost", False)
-    except Exception:
-        pass
-
-    root.destroy()
-
-    return {
-        "INPUT_FILE": infile,
-        "OUTDIR": outdir,
-        "OUT_FULL": os.path.join(outdir, f"{base}_full_.xlsx"),
-        "OUT_WITH": os.path.join(outdir, f"{base}_with_data.xlsx"),
-        "OUT_PROT": os.path.join(outdir, f"{base}_bara_skyddade.xlsx"),
-        "OUT_ALIEN": os.path.join(outdir, f"{base}_frammande_invasiva.xlsx"),
-        "LOG_FILE": os.path.join(outdir, f"{base}_log.txt"),
-        "DBG_FILE": os.path.join(outdir, "tls_debug.csv"),
-        "INPUT_SOURCE": input_source,
-        "WANT_FULL": want_full,
-        "DEBUG": want_debug,
-        "EXPORT_PRESET": export_preset,
-    }
+    app = ArtportalenGui(root, run_fn=run_fn)
+    root.mainloop()

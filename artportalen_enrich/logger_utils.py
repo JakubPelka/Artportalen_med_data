@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 LOG_FILE: Optional[str] = None
 DEBUG: bool = False
 DEBUG_ROWS: List[Dict[str, Any]] = []
+_LOG_LISTENERS: List[Any] = []
 
 
 def configure_logging(log_file: str, debug: bool) -> None:
@@ -15,6 +16,16 @@ def configure_logging(log_file: str, debug: bool) -> None:
     LOG_FILE = log_file
     DEBUG = bool(debug)
     DEBUG_ROWS = []
+
+
+def add_log_listener(callback: Any) -> None:
+    if callback not in _LOG_LISTENERS:
+        _LOG_LISTENERS.append(callback)
+
+
+def remove_log_listener(callback: Any) -> None:
+    if callback in _LOG_LISTENERS:
+        _LOG_LISTENERS.remove(callback)
 
 
 def is_debug() -> bool:
@@ -48,5 +59,11 @@ def log(msg: str) -> None:
         try:
             with open(LOG_FILE, "a", encoding="utf-8") as lf:
                 lf.write(line + "\n")
+        except Exception:
+            pass
+
+    for listener in list(_LOG_LISTENERS):
+        try:
+            listener(line)
         except Exception:
             pass
