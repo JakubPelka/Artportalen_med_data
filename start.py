@@ -100,11 +100,18 @@ def main():
     check_dependencies()
     check_secrets(repo_root)
 
-    env = choose_environment()
-    print(f"\n-> Uruchamianie Artportalen enrich (profil: {env.upper()})\n")
-
     sys.path.insert(0, str(repo_root))
 
+    # Sprawdź czy przekazano argumenty wiersza poleceń
+    from artportalen_enrich.cli import parse_cli_args, run_cli
+    config = parse_cli_args()
+
+    if config is not None:
+        # Tryb CLI / Headless
+        exit_code = run_cli()
+        sys.exit(exit_code)
+
+    # Domyślny tryb graficzny GUI
     try:
         from artportalen_enrich.pipeline import main as pipeline_main
         pipeline_main()
