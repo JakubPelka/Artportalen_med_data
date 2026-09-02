@@ -70,6 +70,13 @@ MOCK_SPECIES_DATA = {
             "ecology": "Häckar vid sjöar och vikar.",
             "threat": "Störning och predation.",
         },
+        "author": "(Linnaeus, 1761)",
+        "taxonRelatedInformation": {
+            "swedishPresence": "Närvarande",
+            "immigrationHistory": "Ursprunglig",
+            "swedishOccurrence": "Bofast",
+            "swedishHistory": "Spontant etablerad",
+        },
     },
     100027: {
         "taxonId": 100027,

@@ -183,6 +183,9 @@ class TestGoldenRegression(unittest.TestCase):
         self.assertEqual(bergand["minskande_faglar"], "Ja")
         self.assertEqual(bergand["Habitatdirektivet2023"], "Ja")
         self.assertEqual(bergand["ActionProgramName"], "ÅGP Kustfåglar")
+        self.assertEqual(bergand["Author"], "(Linnaeus, 1761)")
+        self.assertEqual(bergand["SwedishOccurrence"], "Bofast")
+        self.assertEqual(bergand["SwedishHistory"], "Spontant etablerad")
 
         # 4. Verify Grönsiska (100027)
         gronsiska = enrichment_result[enrichment_result["TaxonId"] == 100027].iloc[0]

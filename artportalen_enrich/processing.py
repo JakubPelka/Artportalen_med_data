@@ -23,6 +23,7 @@ DATA_COLUMNS = [
     "ScientificName",
     "SwedishName",
     "DisplayName",
+    "Author",
     "Category",
     "ConservationStatus",
     "RedListCategory",
@@ -64,6 +65,8 @@ DATA_COLUMNS = [
     "Other",
     "SwedishPresence",
     "ImmigrationHistory",
+    "SwedishOccurrence",
+    "SwedishHistory",
     "SubstrateInformation",
     "EcologicalGroups",
     "ConservationEcology",
@@ -209,6 +212,7 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         record["ScientificName"] = obj.get("scientificName") or item.get("scientificName") or ""
         record["SwedishName"] = gv("swedishName")
         record["DisplayName"] = gv("displayName")
+        record["Author"] = obj.get("author") or item.get("author") or ""
         record["Category"] = gv("category", "name")
         record["ConservationStatus"] = gv("conservationStatus")
 
@@ -364,6 +368,8 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         tri = obj.get("taxonRelatedInformation", {}) or {}
         record["SwedishPresence"] = tri.get("swedishPresence", "") or ""
         record["ImmigrationHistory"] = tri.get("immigrationHistory", "") or ""
+        record["SwedishOccurrence"] = tri.get("swedishOccurrence", "") or ""
+        record["SwedishHistory"] = tri.get("swedishHistory", "") or ""
 
         sub = obj.get("substrateInformation", []) or []
         record["SubstrateInformation"] = join_name_with_attr(sub, "name", sub="use")

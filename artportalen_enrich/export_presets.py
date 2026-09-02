@@ -88,6 +88,7 @@ IDENTIFICATION_COLUMNS = (
     "ScientificName",
     "SwedishName",
     "DisplayName",
+    "Author",
     "Category",
 )
 
@@ -139,6 +140,8 @@ NATURE_TEXT_COLUMNS = (
     "Other",
     "SwedishPresence",
     "ImmigrationHistory",
+    "SwedishOccurrence",
+    "SwedishHistory",
     "SubstrateInformation",
     "EcologicalGroups",
     "ConservationEcology",
