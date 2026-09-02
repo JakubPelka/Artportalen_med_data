@@ -1,7 +1,7 @@
 /secrets
-/dev/artportalen_enrich/__pycache__
-/prod/artportalen_enrich/__pycache__
 /results
-/results
-/results
-/.venv
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store

@@ -9,7 +9,13 @@ import requests
 
 from .config import HEADERS_SPECIES, SPECIES_SLEEP, SPECIES_URL, TIMEOUT, RL_ORDER
 from .logger_utils import add_debug_row, is_debug, log
-from .species_helpers import any_child_named, join_name_with_attr, join_typical_species
+from .species_helpers import (
+    any_child_named,
+    is_minskande_fagel,
+    join_name_with_attr,
+    join_typical_species,
+    select_current_or_latest_redlist,
+)
 from .tls_client import tls_flags_by_membership, tls_is_ready
 from .utils import bool_to_ja, is_empty_value, json_safe
 
@@ -37,6 +43,7 @@ DATA_COLUMNS = [
     "Bonnkonventionen",
     "PrioriteradeFågelarterSkogsvårdslagen",
     "FågeldirektivetBilaga1",
+    "minskande_faglar",
     "Fridlyst",
     "Frid_text",
     "ProtectedByWorkProtectionConstitution",
@@ -74,6 +81,7 @@ FLAG_COLUMNS = [
     "Bonnkonventionen",
     "FågeldirektivetBilaga1",
     "PrioriteradeFågelarterSkogsvårdslagen",
+    "minskande_faglar",
     "Fridlyst",
     "DirectiveAppendix2",
     "DirectiveAppendix2Priority",
@@ -92,6 +100,7 @@ PROTECTION_COLUMNS = [
     "Bonnkonventionen",
     "PrioriteradeFågelarterSkogsvårdslagen",
     "FågeldirektivetBilaga1",
+    "minskande_faglar",
     "ProtectedByWorkProtectionConstitution",
     "ProtectedBirds",
     "DirectiveAppendix2",
@@ -161,23 +170,7 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
         record["ConservationStatus"] = gv("conservationStatus")
 
         redlist_info = obj.get("redlistInfo", []) or []
-        red = next(
-            (
-                r for r in redlist_info
-                if "2020" in str(((r or {}).get("period") or {}).get("name", ""))
-            ),
-            None,
-        )
-        if not red:
-            red = next(
-                (
-                    r for r in redlist_info
-                    if ((r or {}).get("period") or {}).get("current") is True
-                ),
-                None,
-            )
-        if not red and redlist_info:
-            red = redlist_info[0]
+        red = select_current_or_latest_redlist(redlist_info)
 
         record["RedListCategory"] = (red or {}).get("category", "")
         record["RedListCriterion"] = (red or {}).get("criterion", "")
@@ -248,6 +241,15 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
             tls_flags.get("PrioriteradeFågelarterSkogsvårdslagen") or fb_prio
         )
         record["FågeldirektivetBilaga1"] = tls_flags.get("FågeldirektivetBilaga1") or fb_fd1
+        record["minskande_faglar"] = (
+            "Ja"
+            if is_minskande_fagel(
+                record.get("SwedishName", ""),
+                record.get("ScientificName", ""),
+                tid,
+            )
+            else ""
+        )
 
         prot_txt = (obj.get("protectedText") or "").strip()
         frid_flag = (

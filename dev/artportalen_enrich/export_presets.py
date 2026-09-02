@@ -111,6 +111,7 @@ PROTECTION_SUMMARY_COLUMNS = (
     "FågeldirektivetBilaga2",
     "PrioriteradeFågelarterSkogsvårdslagen",
     "SkogsstyrelsensNaturvardsarter",
+    "minskande_faglar",
     "ProtectedByWorkProtectionConstitution",
     "ProtectedBirds",
     "DirectiveAppendix2",

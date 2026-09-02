@@ -109,6 +109,7 @@ PROTECTION_SUMMARY_COLUMNS = (
     "Bonnkonventionen",
     "FågeldirektivetBilaga1",
     "PrioriteradeFågelarterSkogsvårdslagen",
+    "minskande_faglar",
     "ProtectedByWorkProtectionConstitution",
     "ProtectedBirds",
     "DirectiveAppendix2",

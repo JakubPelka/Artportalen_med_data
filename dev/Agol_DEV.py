@@ -22,6 +22,63 @@ from typing import Any, Dict, List, Tuple, Set
 import requests
 import pandas as pd
 
+try:
+    from artportalen_enrich.species_helpers import select_current_or_latest_redlist, is_minskande_fagel
+except ImportError:
+    def _extract_period_year(period: Any) -> int:
+        if not isinstance(period, dict):
+            return 0
+        yr = period.get("year")
+        if yr is not None:
+            try:
+                return int(yr)
+            except (ValueError, TypeError):
+                pass
+        for field in ("name", "periodTo", "periodFrom"):
+            val = str(period.get(field) or "")
+            match = re.search(r"\b(19\d\d|20\d\d)\b", val)
+            if match:
+                try:
+                    return int(match.group(1))
+                except (ValueError, TypeError):
+                    pass
+        return 0
+
+    def select_current_or_latest_redlist(redlist_info: Any) -> Any:
+        if not isinstance(redlist_info, list) or not redlist_info:
+            return None
+        valid_items = [r for r in redlist_info if isinstance(r, dict)]
+        if not valid_items:
+            return None
+        current_items = [
+            r for r in valid_items
+            if ((r.get("period") or {}).get("current") is True)
+        ]
+        if current_items:
+            if len(current_items) > 1:
+                current_items.sort(
+                    key=lambda r: (
+                        _extract_period_year((r.get("period") or {})),
+                        int((r.get("period") or {}).get("id") or 0) if str((r.get("period") or {}).get("id", "")).isdigit() else 0,
+                    ),
+                    reverse=True,
+                )
+            return current_items[0]
+        def _sort_key(r: dict) -> tuple:
+            p = r.get("period") or {}
+            yr = _extract_period_year(p)
+            pid = 0
+            try:
+                pid = int(p.get("id") or 0)
+            except (ValueError, TypeError):
+                pass
+            return (yr, pid)
+        items_with_key = [(r, _sort_key(r)) for r in valid_items]
+        if any(k > (0, 0) for _, k in items_with_key):
+            items_with_key.sort(key=lambda x: x[1], reverse=True)
+            return items_with_key[0][0]
+        return valid_items[0]
+
 # --- GUI (opcjonalnie) ---
 try:
     import tkinter as tk
@@ -629,7 +686,7 @@ def run_pipeline(input_file: str, out_dir: str, prefer_tls: bool, risklista_path
     log("Etap 2: pobieranie danych z SpeciesDataService…")
 
     cols = [
-        "ScientificName","SwedishName","DisplayName","Category","ConservationStatus","CITES","Bernkonventionen","Bonnkonventionen","PrioriteradeFågelarterSkogsvårdslagen","FågeldirektivetBilaga1",
+        "ScientificName","SwedishName","DisplayName","Category","ConservationStatus","CITES","Bernkonventionen","Bonnkonventionen","PrioriteradeFågelarterSkogsvårdslagen","FågeldirektivetBilaga1","minskande_faglar",
         "Fridlyst","Frid_text","ProtectedByWorkProtectionConstitution","ProtectedBirds",
         "DirectiveAppendix2","DirectiveAppendix2Priority","DirectiveAppendix4","DirectiveAppendix5",
         "Artikel 17 - 2019", "ForestrySignal","ForestrySignalSpecies",
@@ -677,13 +734,9 @@ def run_pipeline(input_file: str, out_dir: str, prefer_tls: bool, risklista_path
             rowvals["Category"]       = gv("category", "name")
             rowvals["ConservationStatus"] = gv("conservationStatus")
 
-            # Redlist (jak było)
+            # Redlist
             redlist_info = obj.get("redlistInfo", []) or []
-            red = next((r for r in redlist_info if "2020" in str(((r or {}).get("period") or {}).get("name", ""))), None)
-            if not red:
-                red = next((r for r in redlist_info if ((r or {}).get("period") or {}).get("current") is True), None)
-            if not red and redlist_info:
-                red = redlist_info[0]
+            red = select_current_or_latest_redlist(redlist_info)
             rowvals["RedListCategory"]     = (red or {}).get("category", "")
             rowvals["RedListCriterion"]    = (red or {}).get("criterion", "")
             rowvals["RedListPeriodName"]   = ((red or {}).get("period") or {}).get("name", "")
@@ -765,6 +818,7 @@ def run_pipeline(input_file: str, out_dir: str, prefer_tls: bool, risklista_path
             rowvals["Bonnkonventionen"] = tls_flags.get("Bonnkonventionen") or fb_bonn
             rowvals["PrioriteradeFågelarterSkogsvårdslagen"] = tls_flags.get("PrioriteradeFågelarterSkogsvårdslagen") or fb_prio
             rowvals["FågeldirektivetBilaga1"] = tls_flags.get("FågeldirektivetBilaga1") or fb_fd1
+            rowvals["minskande_faglar"] = "Ja" if is_minskande_fagel(rowvals.get("SwedishName", ""), rowvals.get("ScientificName", ""), tid) else ""
 
             prot_txt = (obj.get("protectedText") or "").strip()
             frid_flag = tls_flags.get("Fridlyst") or has_list_flag(lists, "Fridlysta arter") or has_list_flag(lists, "Fridlysta fåglar")
