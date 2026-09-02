@@ -113,7 +113,10 @@ def mock_requests_post(url, *args, **kwargs):
         mock_resp.content = b'[...]'
         return mock_resp
 
-    return mock_resp
+def mock_client_request(self, method, url, *args, **kwargs):
+    if method.upper() == "POST":
+        return mock_requests_post(url, *args, **kwargs)
+    return mock_requests_get(url, *args, **kwargs)
 
 
 class TestGoldenRegression(unittest.TestCase):
@@ -123,8 +126,8 @@ class TestGoldenRegression(unittest.TestCase):
         self.ap_file = str(self.fixtures_dir / "artportalen_sample.xlsx")
         self.agol_file = str(self.fixtures_dir / "agol_sample.xlsx")
 
-    @patch("requests.get", side_effect=mock_requests_get)
-    def test_artportalen_header_detection_and_taxon_resolution(self, mock_get):
+    @patch("artportalen_enrich.http_client.HttpClient.request", new=mock_client_request)
+    def test_artportalen_header_detection_and_taxon_resolution(self):
         """Verifiera att Artportalen-export med inledande metadata rader tolkas korrekt."""
         input_result = read_input_file(self.ap_file, "auto")
         self.assertEqual(input_result.source_type, "artportalen")
@@ -139,8 +142,8 @@ class TestGoldenRegression(unittest.TestCase):
         ejder_row = df_resolved[df_resolved["Svenskt namn"] == "Ejder"].iloc[0]
         self.assertEqual(int(ejder_row["TaxonId"]), 100021)
 
-    @patch("requests.get", side_effect=mock_requests_get)
-    def test_agol_input_loading_and_taxon_resolution(self, mock_get):
+    @patch("artportalen_enrich.http_client.HttpClient.request", new=mock_client_request)
+    def test_agol_input_loading_and_taxon_resolution(self):
         """Verifiera att AGOL-export tolkas korrekt och saknade TaxonId kompletteras."""
         input_result = read_input_file(self.agol_file, "agol")
         self.assertEqual(input_result.source_type, "agol")
@@ -151,9 +154,8 @@ class TestGoldenRegression(unittest.TestCase):
         gronsiska_row = df_resolved[df_resolved["taxon_svensktNamn"] == "Grönsiska"].iloc[0]
         self.assertEqual(int(gronsiska_row["TaxonId"]), 100027)
 
-    @patch("requests.get", side_effect=mock_requests_get)
-    @patch("requests.post", side_effect=mock_requests_post)
-    def test_full_pipeline_enrichment_regression(self, mock_post, mock_get):
+    @patch("artportalen_enrich.http_client.HttpClient.request", new=mock_client_request)
+    def test_full_pipeline_enrichment_regression(self):
         """Golden test całego pipeline offline: weryfikacja poprawności enrichmentu i flag."""
         # 1. Read input
         input_result = read_input_file(self.ap_file, "artportalen")

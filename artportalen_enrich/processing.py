@@ -5,9 +5,9 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
-import requests
 
-from .config import HEADERS_SPECIES, SPECIES_SLEEP, SPECIES_URL, TIMEOUT, RL_ORDER
+from .config import RL_ORDER, SPECIES_SLEEP, SPECIES_URL
+from .http_client import default_client
 from .logger_utils import add_debug_row, is_debug, log
 from .species_helpers import (
     any_child_named,
@@ -191,10 +191,9 @@ def fetch_species_record(tid: int, index: int, total: int) -> Tuple[Dict[str, An
     dbg: Dict[str, Any] = {"TaxonId": tid}
 
     try:
-        resp = requests.get(
-            f"{SPECIES_URL}?taxa={tid}&culture=sv-SE",
-            headers=HEADERS_SPECIES,
-            timeout=TIMEOUT,
+        resp = default_client.get_species(
+            SPECIES_URL,
+            params={"taxa": tid, "culture": "sv-SE"},
         )
         data = json_safe(resp) if resp and resp.status_code == 200 else []
         item = (data[0] if isinstance(data, list) and data else data) or {}
